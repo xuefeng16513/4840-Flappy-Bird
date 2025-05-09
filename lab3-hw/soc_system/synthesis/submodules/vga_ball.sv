@@ -70,7 +70,14 @@ module vga_ball(input logic        clk,
 	
 	// Address calculation
     always_comb begin
-        bg_addr = vcount * 640 + ((hcount[10:1] + scroll_offset) % 640);
+	logic [9:0] bg_col;
+	bg_col = (hcount[10:1] + scroll_offset);
+	if(bg_col < 640) begin
+	    bg_addr = vcount * 640 + bg_col;
+	end else begin
+	    bg_addr = vcount * 640 + (bg_col - 640);
+	end
+        // bg_addr = vcount * 640 + ((hcount[10:1] + scroll_offset) % 640);
 
         if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
@@ -90,7 +97,7 @@ module vga_ball(input logic        clk,
             scroll_counter <= 0;
         end else begin
             animation_counter <= animation_counter + 1;
-            if (animation_counter == 20) begin
+            if (animation_counter == 24'd10_000_000) begin
                 bird_frame <= bird_frame + 1;
                 animation_counter <= 0;
             end
