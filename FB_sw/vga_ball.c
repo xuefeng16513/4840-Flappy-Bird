@@ -121,6 +121,10 @@ static long vga_ball_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
             return -EACCES;
         break;
 
+	case VGA_BALL_WRITE_FLAP:
+	    printk(KERN_INFO "Flap command received\n");
+	    break;
+
 	default:
 		return -EINVAL;
 	}
