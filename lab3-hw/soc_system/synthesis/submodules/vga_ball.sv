@@ -15,6 +15,7 @@
  *        5    |  Y[7:0]|  Ball Y position (low 8 bits)
  *        6    |  Y[9:8]|  Ball Y position (high 2 bits)
  *        7    | Radius |  Ball radius (in pixels)
+ *        8    |  FLAP  |  Bird flap trigger (bit 0)
  */
 
 module vga_ball(input logic        clk,
@@ -33,18 +34,31 @@ module vga_ball(input logic        clk,
    logic [9:0]     vcount;
 
    logic [9:0] bird_y;
+	logic signed [9:0] bird_velocity;
 	logic [1:0] bird_frame;  // 2-bit index for animation frame (0,1,2)
 	logic [7:0] animation_counter;
+	logic vsync_reg;
+	logic game_started;
 
 	logic [18:0] bg_addr;
 	logic [7:0] bg_color;
 
 	logic [11:0] bird_addr;
 	logic [7:0] bird_color;
+	logic flap;
 
 	parameter BIRD_X = 100;
 	parameter BIRD_WIDTH = 34;
 	parameter BIRD_HEIGHT = 24;
+	
+	parameter GRAVITY = 1;
+   parameter FLAP_STRENGTH = -8;
+	
+	logic [9:0] bird_y_idle;
+	parameter IDLE_MIN = 230;
+	parameter IDLE_MAX = 250;
+	parameter IDLE_STEP = 1;
+	logic idle_dir;  // 0 = up, 1 = down
 	
    vga_counters counters(.clk50(clk), .*);
 	
@@ -65,6 +79,20 @@ module vga_ball(input logic        clk,
 	  endcase
 	end
 	
+	// Receive signal from software
+	always_ff @(posedge clk) begin
+		 if (reset) begin
+			  flap <= 0;
+		 end else if (chipselect && write) begin
+			  case (address)
+					4'h8: flap <= (writedata[0]);
+					default: flap <= 0; // Only pulse
+			  endcase
+		 end else begin
+			  flap <= 0; // auto-clear flap pulse
+		 end
+	end
+	
 	// Address calculation
     always_comb begin
         bg_addr = vcount * 640 + hcount[10:1];
@@ -76,21 +104,48 @@ module vga_ball(input logic        clk,
             bird_addr = 0;  // outside bird → address 0 (transparent)
         end
     end
-	
-	// Animation counter
-    always_ff @(posedge clk or posedge reset) begin
-        if (reset) begin
-            bird_y <= 240;
-            bird_frame <= 0;
-            animation_counter <= 0;
-        end else begin
-            animation_counter <= animation_counter + 1;
-            if (animation_counter == 20) begin
-                bird_frame <= bird_frame + 1;
-                animation_counter <= 0;
-            end
-        end
-    end
+
+
+	always_ff @(posedge clk) begin
+	  vsync_reg <= VGA_VS;
+
+	  if (reset) begin
+		 bird_y <= 240;
+		 bird_velocity <= 0;
+		 bird_frame <= 0;
+		 animation_counter <= 0;
+		 game_started <= 0;
+		 bird_y_idle <= 240;
+		 idle_dir <= 0;
+	  end else if (VGA_VS && !vsync_reg) begin
+		 if (!game_started) begin
+			if (flap) game_started <= 1;
+
+			if (idle_dir == 0) begin
+			  if (bird_y_idle <= IDLE_MIN) idle_dir <= 1;
+			  else bird_y_idle <= bird_y_idle - IDLE_STEP;
+			end else begin
+			  if (bird_y_idle >= IDLE_MAX) idle_dir <= 0;
+			  else bird_y_idle <= bird_y_idle + IDLE_STEP;
+			end
+
+			bird_y <= bird_y_idle;
+		 end else begin
+			if (flap) bird_velocity <= FLAP_STRENGTH;
+			else bird_velocity <= bird_velocity + GRAVITY;
+
+			bird_y <= bird_y + bird_velocity;
+			if (bird_y < 0) bird_y <= 0;
+			if (bird_y > 480 - BIRD_HEIGHT) bird_y <= 480 - BIRD_HEIGHT;
+		 end
+
+		 animation_counter <= animation_counter + 1;
+		 if (animation_counter == 10) begin
+			animation_counter <= 0;
+			bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
+		 end
+	  end
+	end
 
 	// Output color
 	always_comb begin
