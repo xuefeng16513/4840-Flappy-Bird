@@ -18,4 +18,7 @@ typedef struct {
 #define VGA_BALL_READ_BACKGROUND _IOR(VGA_BALL_MAGIC, 2, vga_ball_arg_t)
 #define VGA_BALL_WRITE_BALL _IOW(VGA_BALL_MAGIC, 3, vga_ball_arg_t)
 #define VGA_BALL_READ_BALL _IOR(VGA_BALL_MAGIC, 4, vga_ball_arg_t)
+#define VGA_BALL_FLAP _IO(VGA_BALL_MAGIC, 5)
+#define VGA_BALL_UPDATE_GAME _IO(VGA_BALL_MAGIC, 6)
+#define VGA_BALL_RESET_GAME _IO(VGA_BALL_MAGIC, 7)
 #endif
