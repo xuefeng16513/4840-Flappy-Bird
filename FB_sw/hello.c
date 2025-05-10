@@ -29,6 +29,7 @@ int main() {
     vga_fd = open(DEVICE_FILE, O_RDWR);
     if (vga_fd < 0) {
         perror("Failed to open /dev/vga_ball");
+        libusb_close(keyboard);
         return 1;
     }
 
@@ -46,8 +47,8 @@ int main() {
             if (code == FLAP_KEY) {
                 // Trigger the flap command to FPGA
                 vga_ball_arg_t vla = {0};
-		vla.flap = 1;
-		if (ioctl(vga_fd, VGA_BALL_WRITE_FLAP, &vla) == -1) {
+                vla.flap = 1;
+                if (ioctl(vga_fd, VGA_BALL_WRITE_FLAP, &vla) == -1) {
                     perror("ioctl(VGA_BALL_FLAP) failed");
                 } else {
                     printf("Flap triggered!\n");
@@ -64,6 +65,6 @@ int main() {
     }
 
     close(vga_fd);
+    libusb_close(keyboard);
     return 0;
 }
-
