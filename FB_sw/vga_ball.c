@@ -127,7 +127,7 @@ static long vga_ball_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
 	    // Write to register offset 8 (defined implicitly in vga_ball.sv)
 	    iowrite8(vla.flap, dev.virtbase + 8);  // Send flap signal to hardware
-	    break
+	    break;
 
 	default:
 		return -EINVAL;
