@@ -11,6 +11,7 @@ typedef struct {
 typedef struct {
     vga_ball_color_t background;
     vga_ball_position_t ball;
+    unsigned char flap;  // for passing flap input
 } vga_ball_arg_t;
 #define VGA_BALL_MAGIC 'q'
 /* ioctls and their arguments */
@@ -18,4 +19,5 @@ typedef struct {
 #define VGA_BALL_READ_BACKGROUND _IOR(VGA_BALL_MAGIC, 2, vga_ball_arg_t)
 #define VGA_BALL_WRITE_BALL _IOW(VGA_BALL_MAGIC, 3, vga_ball_arg_t)
 #define VGA_BALL_READ_BALL _IOR(VGA_BALL_MAGIC, 4, vga_ball_arg_t)
+#define VGA_BALL_WRITE_FLAP _IOW(VGA_BALL_MAGIC, 5, vga_ball_arg_t)
 #endif
