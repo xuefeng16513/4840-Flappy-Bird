@@ -15,6 +15,7 @@
  *        5    |  Y[7:0]|  Ball Y position (low 8 bits)
  *        6    |  Y[9:8]|  Ball Y position (high 2 bits)
  *        7    | Radius |  Ball radius (in pixels)
+ *        8    |  FLAP  |  Bird flap trigger (bit 0)
  */
 
 module vga_ball(input logic        clk,
@@ -33,23 +34,31 @@ module vga_ball(input logic        clk,
    logic [9:0]     vcount;
 
    logic [9:0] bird_y;
+	logic signed [9:0] bird_velocity;
 	logic [1:0] bird_frame;  // 2-bit index for animation frame (0,1,2)
 	logic [7:0] animation_counter;
+	logic vsync_reg;
+	logic game_started;
 
 	logic [18:0] bg_addr;
 	logic [7:0] bg_color;
 
 	logic [11:0] bird_addr;
 	logic [7:0] bird_color;
-	
-	logic [9:0] scroll_offset;
-	logic [23:0] scroll_counter;
-	
-	logic [7:0] bird_color_reg;
+	logic flap;
 
 	parameter BIRD_X = 100;
 	parameter BIRD_WIDTH = 34;
 	parameter BIRD_HEIGHT = 24;
+	
+	parameter GRAVITY = 1;
+   parameter FLAP_STRENGTH = -8;
+	
+	logic [9:0] bird_y_idle;
+	parameter IDLE_MIN = 230;
+	parameter IDLE_MAX = 250;
+	parameter IDLE_STEP = 1;
+	logic idle_dir;  // 0 = up, 1 = down
 	
    vga_counters counters(.clk50(clk), .*);
 	
@@ -61,25 +70,32 @@ module vga_ball(input logic        clk,
 	bird_rom2 bird2 (.address(bird_addr), .clock(clk), .q(bird_color2));
 
 	logic [7:0] bird_color0, bird_color1, bird_color2;
-	always_ff @(posedge clk) begin
+	always_comb begin
 	  case (bird_frame)
-			2'd0: bird_color_reg = bird_color0;
-			2'd1: bird_color_reg = bird_color1;
-			2'd2: bird_color_reg = bird_color2;
-			default: bird_color_reg = bird_color0;
+			2'd0: bird_color = bird_color0;
+			2'd1: bird_color = bird_color1;
+			2'd2: bird_color = bird_color2;
+			default: bird_color = bird_color0;
 	  endcase
+	end
+	
+	// Receive signal from software
+	always_ff @(posedge clk) begin
+		 if (reset) begin
+			  flap <= 0;
+		 end else if (chipselect && write) begin
+			  case (address)
+					4'h8: flap <= (writedata[0]);
+					default: flap <= 0; // Only pulse
+			  endcase
+		 end else begin
+			  flap <= 0; // auto-clear flap pulse
+		 end
 	end
 	
 	// Address calculation
     always_comb begin
-	logic [9:0] bg_col;
-	bg_col = (hcount[10:1] + scroll_offset);
-	if(bg_col < 640) begin
-	    bg_addr = vcount * 640 + bg_col;
-	end else begin
-	    bg_addr = vcount * 640 + (bg_col - 640);
-	end
-        // bg_addr = vcount * 640 + ((hcount[10:1] + scroll_offset) % 640);
+        bg_addr = vcount * 640 + hcount[10:1];
 
         if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
@@ -88,64 +104,48 @@ module vga_ball(input logic        clk,
             bird_addr = 0;  // outside bird → address 0 (transparent)
         end
     end
-	
-    logic signed [7:0] bird_velocity;
-	// Animation counter
-    always_ff @(posedge clk or posedge reset) begin
-        if (reset) begin
-            bird_y <= 240;
-            bird_frame <= 0;
-            animation_counter <= 0;
-            scroll_offset <= 0;
-            scroll_counter <= 0;
-        end else begin
-            animation_counter <= animation_counter + 1;
-            if (animation_counter == 24'd10_000_000) begin
-                bird_frame <= bird_frame + 1;
-                animation_counter <= 0;
-            end
 
-/*
-	    if (chipselect && write && address == 3'b101) begin
-		bird_velocity <= -8'sd8;  // Jump
-	    end else begin
-		bird_velocity <= bird_velocity + 1;
-	    end
-	    bird_y <= bird_y + bird_velocity;
 
-	    if (bird_y < 0)
-		bird_y <= 0;
-	    else if (bird_y > (480 - BIRD_HEIGHT))
-		bird_y <= 480 - BIRD_HEIGHT;
-*/
+	always_ff @(posedge clk) begin
+	  vsync_reg <= VGA_VS;
 
-            scroll_counter <= scroll_counter + 1;
-            if(scroll_counter == 24'd1_000_000) begin
-		scroll_offset <= scroll_offset + 1;
-		scroll_counter <= 0;
-            end
-        end
-    end
+	  if (reset) begin
+		 bird_y <= 240;
+		 bird_velocity <= 0;
+		 bird_frame <= 0;
+		 animation_counter <= 0;
+		 game_started <= 0;
+		 bird_y_idle <= 240;
+		 idle_dir <= 0;
+	  end else if (VGA_VS && !vsync_reg) begin
+		 if (!game_started) begin
+			if (flap) game_started <= 1;
 
-    // === Ground ROM Instantiation ===
-    logic [15:0] ground_addr;
-    logic [7:0] ground_color;
+			if (idle_dir == 0) begin
+			  if (bird_y_idle <= IDLE_MIN) idle_dir <= 1;
+			  else bird_y_idle <= bird_y_idle - IDLE_STEP;
+			end else begin
+			  if (bird_y_idle >= IDLE_MAX) idle_dir <= 0;
+			  else bird_y_idle <= bird_y_idle + IDLE_STEP;
+			end
 
-    base_rom ground_inst (
-        .address(ground_addr),
-        .clock(clk),
-        .q(ground_color)
-    );
+			bird_y <= bird_y_idle;
+		 end else begin
+			if (flap) bird_velocity <= FLAP_STRENGTH;
+			else bird_velocity <= bird_velocity + GRAVITY;
 
-    // === Ground Address Generation ===
-    always_comb begin
-        // Assume ground is 40 pixels high, bottom of 480p screen
-        if (vcount >= 440 && vcount < 480) begin
-            ground_addr = (vcount - 440) * 640 + ((hcount[10:1] + scroll_offset) % 640);
-        end else begin
-            ground_addr = 0;
-        end
-    end
+			bird_y <= bird_y + bird_velocity;
+			if (bird_y < 0) bird_y <= 0;
+			if (bird_y > 480 - BIRD_HEIGHT) bird_y <= 480 - BIRD_HEIGHT;
+		 end
+
+		 animation_counter <= animation_counter + 1;
+		 if (animation_counter == 10) begin
+			animation_counter <= 0;
+			bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
+		 end
+	  end
+	end
 
 	// Output color
 	always_comb begin
@@ -153,15 +153,11 @@ module vga_ball(input logic        clk,
 		 if (VGA_BLANK_n) begin
 			  if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
 					vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
-					bird_color_reg != 8'h00) begin
+					bird_color != 8'h00) begin
 					// Bird pixel, apply R3 G3 B2 unpack
-					VGA_R = {bird_color_reg[7:5], 5'b00000};
-					VGA_G = {bird_color_reg[4:2], 5'b00000};
-					VGA_B = {bird_color_reg[1:0], 6'b000000};
-        		  end else if (vcount >= 440 && vcount < 480) begin
-            				VGA_R = ground_color;
-            				VGA_G = ground_color;
-            				VGA_B = ground_color;
+					VGA_R = {bird_color[7:5], 5'b00000};
+					VGA_G = {bird_color[4:2], 5'b00000};
+					VGA_B = {bird_color[1:0], 6'b000000};
 			  end else begin
 					// Background pixel, apply B3 G3 R2 unpack
 					VGA_B = {bg_color[7:5], 5'b00000};
