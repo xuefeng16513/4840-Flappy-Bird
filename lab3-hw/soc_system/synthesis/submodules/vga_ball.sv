@@ -33,19 +33,47 @@ module vga_ball(input logic        clk,
    logic [9:0]     vcount;
 
    logic [9:0] bird_y;
+   logic signed [9:0] bird_velocity;
 	logic [1:0] bird_frame;  // 2-bit index for animation frame (0,1,2)
 	logic [7:0] animation_counter;
+   logic vsync_reg;
+   logic game_started;
 
 	logic [18:0] bg_addr;
 	logic [7:0] bg_color;
 
 	logic [11:0] bird_addr;
 	logic [7:0] bird_color;
+	
+        logic flap_latched;
+
+	logic [9:0] scroll_offset;
+	logic [23:0] scroll_counter;
+	
+	logic [7:0] bird_color_reg;
 
 	parameter BIRD_X = 100;
 	parameter BIRD_WIDTH = 34;
 	parameter BIRD_HEIGHT = 24;
+	parameter PIPE_WIDTH = 34;
+	parameter PIPE_GAP_HEIGHT = 100;
+	parameter PIPE_SPACING = 100;
+	parameter PIPE_COUNT = 10;
+	parameter GROUND_Y_TOP = 480;
+	parameter MAX_GAP_START = GROUND_Y_TOP - PIPE_GAP_HEIGHT - 40;
+
+        parameter GRAVITY = 1;
+        parameter FLAP_STRENGTH = -16;
+
+
+	logic [9:0] pipe_x[PIPE_COUNT];
+	logic [9:0] pipe_gap_y[PIPE_COUNT];
+
 	
+   // TEST MODE ADDITIONS
+   logic [31:0] test_counter;
+   parameter TEST_INTERVAL = 50000000; // About 1 second at 50 MHz
+
    vga_counters counters(.clk50(clk), .*);
 	
 	bg_rom bg_rom_inst (.address(bg_addr), .clock(clk), .data(8'b0), .wren(1'b0), .q(bg_color));
@@ -56,18 +84,44 @@ module vga_ball(input logic        clk,
 	bird_rom2 bird2 (.address(bird_addr), .clock(clk), .q(bird_color2));
 
 	logic [7:0] bird_color0, bird_color1, bird_color2;
-	always_comb begin
+	always_ff @(posedge clk) begin
 	  case (bird_frame)
-			2'd0: bird_color = bird_color0;
-			2'd1: bird_color = bird_color1;
-			2'd2: bird_color = bird_color2;
-			default: bird_color = bird_color0;
+			2'd0: bird_color_reg = bird_color0;
+			2'd1: bird_color_reg = bird_color1;
+			2'd2: bird_color_reg = bird_color2;
+			default: bird_color_reg = bird_color0;
 	  endcase
 	end
 	
+
+   // === TEST MODE - Auto flap timer ===
+   always_ff @(posedge clk) begin
+     if (reset) begin
+        test_counter <= 0;
+        flap_latched <= 0;
+        game_started <= 1; // Start game immediately for testing
+     end else begin
+        // Auto-flap timer - triggers flap every TEST_INTERVAL cycles
+        test_counter <= test_counter + 1;
+        if (test_counter >= TEST_INTERVAL) begin
+           test_counter <= 0;
+           flap_latched <= 1;
+        end else if (VGA_VS && !vsync_reg) begin
+           flap_latched <= 0; // Reset flap after consumed during vsync
+        end
+     end
+   end
+
 	// Address calculation
     always_comb begin
-        bg_addr = vcount * 640 + hcount[10:1];
+	logic [9:0] bg_col;
+	bg_col = (hcount[10:1] + scroll_offset);
+	if(bg_col < 640) begin
+	    bg_addr = vcount * 640 + bg_col;
+	end else begin
+	    bg_addr = vcount * 640 + (bg_col - 640);
+	end
+        // bg_addr = vcount * 640 + ((hcount[10:1] + scroll_offset) % 640);
 
         if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
@@ -77,19 +131,125 @@ module vga_ball(input logic        clk,
         end
     end
 	
+
 	// Animation counter
     always_ff @(posedge clk or posedge reset) begin
+	vsync_reg <= VGA_VS;	
+	
         if (reset) begin
             bird_y <= 240;
             bird_frame <= 0;
             animation_counter <= 0;
-        end else begin
+	    bird_velocity <= 0;
+            scroll_offset <= 0;
+            scroll_counter <= 0;
+
+	    for (int i = 0; i < PIPE_COUNT; i++) begin
+		pipe_x[i] <= 640 + i * PIPE_SPACING;
+		// pipe_gap_y[i] <= 150 + i * 50;
+		pipe_gap_y[i] <= (pipe_gap_y[i] + (i * 15 + scroll_offset[3:0])) % MAX_GAP_START;
+	    end
+
+        end else if (VGA_VS && !vsync_reg) begin
             animation_counter <= animation_counter + 1;
-            if (animation_counter == 20) begin
-                bird_frame <= bird_frame + 1;
-                animation_counter <= 0;
+            if (animation_counter == 10) begin
+               animation_counter <= 0;
+               bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
+            end
+        
+            // TEST MODE - Always in game state
+            // Apply flap if flap_latched is set
+            if (flap_latched) begin
+               bird_velocity <= FLAP_STRENGTH;
+            end else begin
+               bird_velocity <= bird_velocity + GRAVITY;
+            end
+
+            // Update bird position
+            bird_y <= bird_y + bird_velocity;
+        
+            // Boundary checks
+            if (bird_y < 0) bird_y <= 0;
+            if (bird_y > 480 - BIRD_HEIGHT) bird_y <= 480 - BIRD_HEIGHT;
+
+        end else begin
+
+
+/*
+	    if (chipselect && write && address == 3'b101) begin
+		bird_velocity <= -8'sd8;  // Jump
+	    end else begin
+		bird_velocity <= bird_velocity + 1;
+	    end
+	    bird_y <= bird_y + bird_velocity;
+
+	    if (bird_y < 0)
+		bird_y <= 0;
+	    else if (bird_y > (480 - BIRD_HEIGHT))
+		bird_y <= 480 - BIRD_HEIGHT;
+*/
+
+            scroll_counter <= scroll_counter + 1;
+            if(scroll_counter == 24'd1_000_000) begin
+		scroll_offset <= scroll_offset + 1;
+		scroll_counter <= 0;
+
+	    	for (int i = 0; i < PIPE_COUNT; i++) begin
+			if (pipe_x[i] + PIPE_WIDTH <= 0) begin
+			    logic [9:0] max_pipe_x = 0;
+			    for(int j = 0; j < PIPE_COUNT; j++) begin
+				if(pipe_x[j] > max_pipe_x)
+				    max_pipe_x = pipe_x[j];
+			    end
+		    	    pipe_x[i] <= max_pipe_x + PIPE_SPACING;
+		    	    pipe_gap_y[i] <= (pipe_gap_y[i] + 30) % (480 - PIPE_GAP_HEIGHT - 40);
+			end else begin
+		    	pipe_x[i] <= pipe_x[i] - 1;
+			end
+		end
+	
             end
         end
+    end
+
+    // === Ground ROM Instantiation ===
+    logic [15:0] ground_addr;
+    logic [7:0] ground_color;
+
+    base_rom ground_inst (
+        .address(ground_addr),
+        .clock(clk),
+        .q(ground_color)
+    );
+
+    // === Ground Address Generation ===
+    always_comb begin
+        // Assume ground is 40 pixels high, bottom of 480p screen
+        if (vcount >= 400 && vcount < 480) begin
+            ground_addr = (vcount - 400) * 640 + ((hcount[10:1] + scroll_offset) % 640);
+        end else begin
+            ground_addr = 0;
+        end
+    end
+
+    // Pipe Rom Instantiation
+    logic [11:0] pipe_addr;
+    logic [7:0] pipe_color;
+
+    pipe_rom pipe_inst(.address(pipe_addr), .clock(clk), .q(pipe_color));
+
+    // Pipe Generation
+    always_comb begin
+	pipe_addr = 12'd0;
+	for(int i = 0; i < PIPE_COUNT; i++) begin
+	    if(hcount[10:1] >= pipe_x[i] && hcount[10:1] < pipe_x[i] + PIPE_WIDTH) begin
+		if (vcount < pipe_gap_y[i] && vcount < 480 - PIPE_GAP_HEIGHT - PIPE_GAP_HEIGHT) begin
+		    pipe_addr = (pipe_gap_y[i] - vcount - 1) * PIPE_WIDTH + (hcount[10:1] - pipe_x[i]);
+		end else if (vcount >= pipe_gap_y[i] + PIPE_GAP_HEIGHT && vcount < GROUND_Y_TOP && vcount <= 400) begin
+		    pipe_addr = (vcount - (pipe_gap_y[i] + PIPE_GAP_HEIGHT)) * PIPE_WIDTH + (hcount[10:1] - pipe_x[i]);
+		end
+	    end
+	end
     end
 
 	// Output color
@@ -98,11 +258,19 @@ module vga_ball(input logic        clk,
 		 if (VGA_BLANK_n) begin
 			  if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
 					vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
-					bird_color != 8'h00) begin
+					bird_color_reg != 8'h00) begin
 					// Bird pixel, apply R3 G3 B2 unpack
-					VGA_R = {bird_color[7:5], 5'b00000};
-					VGA_G = {bird_color[4:2], 5'b00000};
-					VGA_B = {bird_color[1:0], 6'b000000};
+					VGA_R = {bird_color_reg[7:5], 5'b00000};
+					VGA_G = {bird_color_reg[4:2], 5'b00000};
+					VGA_B = {bird_color_reg[1:0], 6'b000000};
+			  end else if (pipe_addr != 12'd0 && pipe_color != 8'h00) begin
+					VGA_R = {pipe_color[7:5], 5'b00000};
+					VGA_G = {pipe_color[4:2], 5'b00000};
+					VGA_B = {pipe_color[1:0], 6'b000000};
+        		  end else if (vcount >= 400 && vcount < 480) begin
+            				VGA_R = ground_color;
+            				VGA_G = ground_color;
+            				VGA_B = ground_color;
 			  end else begin
 					// Background pixel, apply B3 G3 R2 unpack
 					VGA_B = {bg_color[7:5], 5'b00000};
