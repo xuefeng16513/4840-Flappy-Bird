@@ -1,8 +1,7 @@
 /*
  * Avalon memory-mapped peripheral that generates VGA
  *
- * Modified for lab 3: Displays a movable square instead of a circle
- * to simplify debugging
+ * Modified for Flappy Bird game implementation
  *
  * Register map:
  * 
@@ -19,154 +18,147 @@
  */
 
 module vga_ball(input logic        clk,
-	        input logic 	   reset,
-		input logic [7:0]  writedata,
-		input logic 	   write,
-		input 		   chipselect,
-		input logic [2:0]  address,
+                input logic        reset,
+                input logic [7:0]  writedata,
+                input logic        write,
+                input              chipselect,
+                input logic [3:0]  address,
 
-		output logic [7:0] VGA_R, VGA_G, VGA_B,
-		output logic 	   VGA_CLK, VGA_HS, VGA_VS,
-		                   VGA_BLANK_n,
-		output logic 	   VGA_SYNC_n);
+                output logic [7:0] VGA_R, VGA_G, VGA_B,
+                output logic       VGA_CLK, VGA_HS, VGA_VS,
+                                   VGA_BLANK_n,
+                output logic       VGA_SYNC_n);
 
-   logic [10:0]	   hcount;
+   logic [10:0]    hcount;
    logic [9:0]     vcount;
 
    logic [9:0] bird_y;
-	logic signed [9:0] bird_velocity;
-	logic [1:0] bird_frame;  // 2-bit index for animation frame (0,1,2)
-	logic [7:0] animation_counter;
-	logic vsync_reg;
-	logic game_started;
+   logic signed [9:0] bird_velocity;
+   logic [1:0] bird_frame;  // 2-bit index for animation frame (0,1,2)
+   logic [7:0] animation_counter;
+   logic vsync_reg;
+   logic game_started;
 
-	logic [18:0] bg_addr;
-	logic [7:0] bg_color;
+   logic [18:0] bg_addr;
+   logic [7:0] bg_color;
 
-	logic [11:0] bird_addr;
-	logic [7:0] bird_color;
-	logic flap;
+   logic [11:0] bird_addr;
+   logic [7:0] bird_color;
+   logic flap_latched;
 
-	parameter BIRD_X = 100;
-	parameter BIRD_WIDTH = 34;
-	parameter BIRD_HEIGHT = 24;
-	
-	parameter GRAVITY = 1;
-   parameter FLAP_STRENGTH = -8;
-	
-	logic [9:0] bird_y_idle;
-	parameter IDLE_MIN = 230;
-	parameter IDLE_MAX = 250;
-	parameter IDLE_STEP = 1;
-	logic idle_dir;  // 0 = up, 1 = down
-	
+   parameter BIRD_X = 100;
+   parameter BIRD_WIDTH = 34;
+   parameter BIRD_HEIGHT = 24;
+    
+   parameter GRAVITY = 1;
+   parameter FLAP_STRENGTH = -16;
+    
+   // TEST MODE ADDITIONS
+   logic [31:0] test_counter;
+   parameter TEST_INTERVAL = 50000000; // About 1 second at 50 MHz
+    
    vga_counters counters(.clk50(clk), .*);
-	
-	bg_rom bg_rom_inst (.address(bg_addr), .clock(clk), .data(8'b0), .wren(1'b0), .q(bg_color));
-	 
-	// Bird sprite ROMs (one per frame)
-	bird_rom0 bird0 (.address(bird_addr), .clock(clk), .q(bird_color0));
-	bird_rom1 bird1 (.address(bird_addr), .clock(clk), .q(bird_color1));
-	bird_rom2 bird2 (.address(bird_addr), .clock(clk), .q(bird_color2));
+    
+   bg_rom bg_rom_inst (.address(bg_addr), .clock(clk), .data(8'b0), .wren(1'b0), .q(bg_color));
+     
+   // Bird sprite ROMs (one per frame)
+   bird_rom0 bird0 (.address(bird_addr), .clock(clk), .q(bird_color0));
+   bird_rom1 bird1 (.address(bird_addr), .clock(clk), .q(bird_color1));
+   bird_rom2 bird2 (.address(bird_addr), .clock(clk), .q(bird_color2));
 
-	logic [7:0] bird_color0, bird_color1, bird_color2;
-	always_comb begin
-	  case (bird_frame)
-			2'd0: bird_color = bird_color0;
-			2'd1: bird_color = bird_color1;
-			2'd2: bird_color = bird_color2;
-			default: bird_color = bird_color0;
-	  endcase
-	end
-	
-	// Receive signal from software
-	always_ff @(posedge clk) begin
-		 if (reset) begin
-			  flap <= 0;
-		 end else if (chipselect && write) begin
-			  case (address)
-					4'h8: flap <= (writedata[0]);
-					default: flap <= 0; // Only pulse
-			  endcase
-		 end else begin
-			  flap <= 0; // auto-clear flap pulse
-		 end
-	end
-	
-	// Address calculation
-    always_comb begin
-        bg_addr = vcount * 640 + hcount[10:1];
-
-        if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
-            vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
-            bird_addr = (vcount - bird_y) * BIRD_WIDTH + (hcount[10:1] - BIRD_X);
-        end else begin
-            bird_addr = 0;  // outside bird → address 0 (transparent)
+   logic [7:0] bird_color0, bird_color1, bird_color2;
+   always_comb begin
+     case (bird_frame)
+        2'd0: bird_color = bird_color0;
+        2'd1: bird_color = bird_color1;
+        2'd2: bird_color = bird_color2;
+        default: bird_color = bird_color0;
+     endcase
+   end
+    
+   // === TEST MODE - Auto flap timer ===
+   always_ff @(posedge clk) begin
+     if (reset) begin
+        test_counter <= 0;
+        flap_latched <= 0;
+        game_started <= 1; // Start game immediately for testing
+     end else begin
+        // Auto-flap timer - triggers flap every TEST_INTERVAL cycles
+        test_counter <= test_counter + 1;
+        if (test_counter >= TEST_INTERVAL) begin
+           test_counter <= 0;
+           flap_latched <= 1;
+        end else if (VGA_VS && !vsync_reg) begin
+           flap_latched <= 0; // Reset flap after consumed during vsync
         end
-    end
+     end
+   end
+    
+   // Address calculation
+   always_comb begin
+       bg_addr = vcount * 640 + hcount[10:1];
 
+       if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
+           vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
+           bird_addr = (vcount - bird_y) * BIRD_WIDTH + (hcount[10:1] - BIRD_X);
+       end else begin
+           bird_addr = 0;  // outside bird → address 0 (transparent)
+       end
+   end
 
-	always_ff @(posedge clk) begin
-	  vsync_reg <= VGA_VS;
+   // Bird physics and animation
+   always_ff @(posedge clk) begin
+     vsync_reg <= VGA_VS;
 
-	  if (reset) begin
-		 bird_y <= 240;
-		 bird_velocity <= 0;
-		 bird_frame <= 0;
-		 animation_counter <= 0;
-		 game_started <= 0;
-		 bird_y_idle <= 240;
-		 idle_dir <= 0;
-	  end else if (VGA_VS && !vsync_reg) begin
-		 if (!game_started) begin
-			if (flap) game_started <= 1;
+     if (reset) begin
+        bird_y <= 240;
+        bird_velocity <= 0;
+        bird_frame <= 0;
+        animation_counter <= 0;
+     end else if (VGA_VS && !vsync_reg) begin
+        animation_counter <= animation_counter + 1;
+        if (animation_counter == 10) begin
+           animation_counter <= 0;
+           bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
+        end
+        
+        // TEST MODE - Always in game state
+        // Apply flap if flap_latched is set
+        if (flap_latched) begin
+           bird_velocity <= FLAP_STRENGTH;
+        end else begin
+           bird_velocity <= bird_velocity + GRAVITY;
+        end
 
-			if (idle_dir == 0) begin
-			  if (bird_y_idle <= IDLE_MIN) idle_dir <= 1;
-			  else bird_y_idle <= bird_y_idle - IDLE_STEP;
-			end else begin
-			  if (bird_y_idle >= IDLE_MAX) idle_dir <= 0;
-			  else bird_y_idle <= bird_y_idle + IDLE_STEP;
-			end
+        // Update bird position
+        bird_y <= bird_y + bird_velocity;
+        
+        // Boundary checks
+        if (bird_y < 0) bird_y <= 0;
+        if (bird_y > 480 - BIRD_HEIGHT) bird_y <= 480 - BIRD_HEIGHT;
+     end
+   end
 
-			bird_y <= bird_y_idle;
-		 end else begin
-			if (flap) bird_velocity <= FLAP_STRENGTH;
-			else bird_velocity <= bird_velocity + GRAVITY;
-
-			bird_y <= bird_y + bird_velocity;
-			if (bird_y < 0) bird_y <= 0;
-			if (bird_y > 480 - BIRD_HEIGHT) bird_y <= 480 - BIRD_HEIGHT;
-		 end
-
-		 animation_counter <= animation_counter + 1;
-		 if (animation_counter == 10) begin
-			animation_counter <= 0;
-			bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
-		 end
-	  end
-	end
-
-	// Output color
-	always_comb begin
-		 {VGA_R, VGA_G, VGA_B} = 24'h000000;
-		 if (VGA_BLANK_n) begin
-			  if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
-					vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
-					bird_color != 8'h00) begin
-					// Bird pixel, apply R3 G3 B2 unpack
-					VGA_R = {bird_color[7:5], 5'b00000};
-					VGA_G = {bird_color[4:2], 5'b00000};
-					VGA_B = {bird_color[1:0], 6'b000000};
-			  end else begin
-					// Background pixel, apply B3 G3 R2 unpack
-					VGA_B = {bg_color[7:5], 5'b00000};
-					VGA_G = {bg_color[4:2], 5'b00000};
-					VGA_R = {bg_color[1:0], 6'b000000};
-			  end
-		 end
-	end
-		 
+   // Output color
+   always_comb begin
+      {VGA_R, VGA_G, VGA_B} = 24'h000000;
+      if (VGA_BLANK_n) begin
+         if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
+             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
+             bird_color != 8'h00) begin
+             // Bird pixel, apply R3 G3 B2 unpack
+             VGA_R = {bird_color[7:5], 5'b00000};
+             VGA_G = {bird_color[4:2], 5'b00000};
+             VGA_B = {bird_color[1:0], 6'b000000};
+         end else begin
+             // Background pixel, apply B3 G3 R2 unpack
+             VGA_B = {bg_color[7:5], 5'b00000};
+             VGA_G = {bg_color[4:2], 5'b00000};
+             VGA_R = {bg_color[1:0], 6'b000000};
+         end
+      end
+   end
+         
 endmodule
 
 module vga_counters(
