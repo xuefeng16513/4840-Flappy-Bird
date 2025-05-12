@@ -94,7 +94,7 @@ static void write_flap(unsigned char flap)
     unsigned char value = flap ? 1 : 0;
     
     // Write to register 8
-    iowrite8(value, FLAP_SIGNAL(dev.virtbase));
+    iowrite8(value, dev.virtbase + 8);
     
     // Store in device structure
     dev.flap = value;
