@@ -65,6 +65,9 @@ module vga_ball(input logic        clk,
    logic [15:0] random_counter;
    logic pipe_pixel;  // Indicates if current pixel is part of a pipe
    
+   // For gap center calculation in always_comb
+   logic [9:0] gap_center;
+   
    parameter BIRD_X = 100;
    parameter BIRD_WIDTH = 34;
    parameter BIRD_HEIGHT = 24;
@@ -216,9 +219,8 @@ module vga_ball(input logic        clk,
       // Check for each pipe
       for (int i = 0; i < NUM_PIPES; i++) begin
          if (pipe_active[i]) begin
-            // Calculate gap center and size based on the gap_y parameter
-            // This matches the C code's calculation: hPillar*5+25 to hPillar*5+145
-            logic [9:0] gap_center = pipe_gap_y[i] * 5 + 85; // Center of the gap
+            // Calculate gap center based on the gap_y parameter
+            gap_center = pipe_gap_y[i] * 5 + 85; // Center of the gap
             
             // Check if within pipe's horizontal bounds
             if (hcount[10:1] >= pipe_x[i] && hcount[10:1] < pipe_x[i] + PIPE_WIDTH) begin
