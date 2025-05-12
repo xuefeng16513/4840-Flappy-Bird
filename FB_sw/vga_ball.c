@@ -43,8 +43,8 @@
 #define BALL_X_HIGH(x) ((x)+4)
 #define BALL_Y_LOW(x) ((x)+5)
 #define BALL_Y_HIGH(x) ((x)+6)
-//#define BALL_RADIUS(x) ((x)+7)
-#define FLAP_SIGNAL(x) ((x)+7)  /* Register 8 for flap signal */
+// #define BALL_RADIUS(x) ((x)+7)  // Repurposed for flap signal
+#define FLAP_SIGNAL(x) ((x)+7)  /* Register 7 for flap signal */
 
 /*
  * Information about our device
@@ -79,7 +79,7 @@ static void write_ball_position(vga_ball_position_t *ball)
     iowrite8(ball->y & 0xff, BALL_Y_LOW(dev.virtbase));
     iowrite8((ball->y >> 8) & 0x03, BALL_Y_HIGH(dev.virtbase));
     
-    // Write ball radius
+    // Write ball radius no longer used - register 7 repurposed for flap
     // iowrite8(ball->radius, BALL_RADIUS(dev.virtbase));
     
     dev.ball = *ball;
@@ -94,7 +94,7 @@ static void write_flap(unsigned char flap)
     unsigned char value = flap ? 1 : 0;
     
     // Write to register 7
-    iowrite8(value, dev.virtbase + 7);
+    iowrite8(value, FLAP_SIGNAL(dev.virtbase));
     
     // Store in device structure
     dev.flap = value;
@@ -176,7 +176,7 @@ static struct miscdevice vga_ball_misc_device = {
 static int __init vga_ball_probe(struct platform_device *pdev)
 {
         vga_ball_color_t beige = { 0xf9, 0xe4, 0xb7 };
-		vga_ball_position_t initial_ball = { 320, 240, 20 };
+	vga_ball_position_t initial_ball = { 320, 240, 20 };
 	int ret;
 
 	/* Register ourselves as a misc device: creates /dev/vga_ball */

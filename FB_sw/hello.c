@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <stdint.h>
+#include <sys/ioctl.h>
 #include "usbkeyboard.h"
+#include "vga_ball.h"
 
 #define FLAP_KEY 0x2C  // USB keycode for spacebar
 #define ESC_KEY  0x29  // USB keycode for ESC
@@ -46,11 +46,12 @@ int main() {
             uint8_t code = packet.keycode[0];
 
             if (code == FLAP_KEY) {
-                // Write to register 7 (flap trigger)
-                uint8_t flap = 1;
-                if (lseek(vga_fd, 7, SEEK_SET) == -1 ||
-                    write(vga_fd, &flap, sizeof(flap)) != sizeof(flap)) {
-                    perror("write to reg 7 failed");
+                // Trigger the flap command to FPGA using IOCTL
+                vga_ball_arg_t vla = {0};  // Initialize all fields to 0
+                vla.flap = 1;              // Set flap bit
+                
+                if (ioctl(vga_fd, VGA_BALL_WRITE_FLAP, &vla) == -1) {
+                    perror("ioctl(VGA_BALL_WRITE_FLAP) failed");
                 } else {
                     printf("Flap triggered!\n");
                 }
