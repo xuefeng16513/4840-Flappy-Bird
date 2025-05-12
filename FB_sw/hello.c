@@ -38,14 +38,17 @@ int main() {
 
     // Main loop
     while (1) {
-        libusb_interrupt_transfer(keyboard, endpoint_address,
+        // Poll keyboard with a timeout of 10ms
+        int result = libusb_interrupt_transfer(keyboard, endpoint_address,
             (unsigned char *)&packet, sizeof(packet),
-            &transferred, 0);
+            &transferred, 10);
 
-        if (transferred == sizeof(packet)) {
+        if (result == 0 && transferred == sizeof(packet)) {
             uint8_t code = packet.keycode[0];
 
             if (code == FLAP_KEY) {
+                printf("SPACEBAR detected! Sending flap command...\n");
+                
                 // Trigger the flap command to FPGA using IOCTL
                 vga_ball_arg_t vla = {0};  // Initialize all fields to 0
                 vla.flap = 1;              // Set flap bit
@@ -53,7 +56,12 @@ int main() {
                 if (ioctl(vga_fd, VGA_BALL_WRITE_FLAP, &vla) == -1) {
                     perror("ioctl(VGA_BALL_WRITE_FLAP) failed");
                 } else {
-                    printf("Flap triggered!\n");
+                    printf("Flap triggered successfully!\n");
+					usleep(20000);  // 20ms should be enough for at least one frame
+
+					// Reset flap signal
+					vla.flap = 0;
+					ioctl(vga_fd, VGA_BALL_WRITE_FLAP, &vla);
                 }
             }
 
@@ -61,9 +69,12 @@ int main() {
                 printf("Exiting...\n");
                 break;
             }
+        } else if (result != 0 && result != LIBUSB_ERROR_TIMEOUT) {
+            // Only report non-timeout errors
+            fprintf(stderr, "libusb_interrupt_transfer error: %d\n", result);
         }
 
-        usleep(10000);  // Avoid CPU hogging
+        usleep(10000);  // 10ms sleep to avoid CPU hogging
     }
 
     close(vga_fd);
