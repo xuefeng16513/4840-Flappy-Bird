@@ -49,7 +49,7 @@ int main() {
                 vga_ball_arg_t vla = {0};
                 vla.flap = 1;
                 if (ioctl(vga_fd, VGA_BALL_WRITE_FLAP, &vla) == -1) {
-                    perror("ioctl(VGA_BALL_FLAP) failed");
+                    perror("ioctl(VGA_BALL_WRITE_FLAP) failed");
                 } else {
                     printf("Flap triggered!\n");
                 }

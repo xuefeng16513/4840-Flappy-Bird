@@ -43,8 +43,8 @@
 #define BALL_X_HIGH(x) ((x)+4)
 #define BALL_Y_LOW(x) ((x)+5)
 #define BALL_Y_HIGH(x) ((x)+6)
-#define BALL_RADIUS(x) ((x)+7)
-#define FLAP_SIGNAL(x) ((x)+8)  /* Register 8 for flap signal */
+//#define BALL_RADIUS(x) ((x)+7)
+#define FLAP_SIGNAL(x) ((x)+7)  /* Register 8 for flap signal */
 
 /*
  * Information about our device
@@ -80,7 +80,7 @@ static void write_ball_position(vga_ball_position_t *ball)
     iowrite8((ball->y >> 8) & 0x03, BALL_Y_HIGH(dev.virtbase));
     
     // Write ball radius
-    iowrite8(ball->radius, BALL_RADIUS(dev.virtbase));
+    // iowrite8(ball->radius, BALL_RADIUS(dev.virtbase));
     
     dev.ball = *ball;
 }
@@ -93,14 +93,14 @@ static void write_flap(unsigned char flap)
     // Ensure value is either 0 or 1
     unsigned char value = flap ? 1 : 0;
     
-    // Write to register 8
-    iowrite8(value, dev.virtbase + 8);
+    // Write to register 7
+    iowrite8(value, dev.virtbase + 7);
     
     // Store in device structure
     dev.flap = value;
     
     // Debug message to kernel log
-    printk(KERN_INFO "vga_ball: Wrote flap value %d to register 8\n", value);
+    printk(KERN_INFO "vga_ball: Wrote flap value %d to register 7\n", value);
 }
 
 /*
