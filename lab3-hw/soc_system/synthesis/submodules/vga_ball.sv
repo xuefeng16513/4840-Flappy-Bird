@@ -47,33 +47,37 @@ module vga_ball(input logic        clk,
    logic flap_latched;
 
    // Pipe parameters
-   parameter NUM_PIPES = 3;              // Number of pipes on screen at once
    parameter PIPE_WIDTH = 70;            // Width of pipes in pixels
-   parameter PIPE_GAP_HEIGHT = 120;      // Gap between top and bottom pipes
    parameter PIPE_SPEED = 2;             // Pixels per frame the pipes move left
-   parameter PIPE_RESET_X = 780;         // X position where pipes reset to
    parameter PIPE_COLOR_R = 8'h00;       // Pipe color (Red) - pure green pipes
    parameter PIPE_COLOR_G = 8'hC0;       // Pipe color (Green)
    parameter PIPE_COLOR_B = 8'h00;       // Pipe color (Blue)
    
-   // Pipe state variables
-   logic [9:0] pipe_x[NUM_PIPES];        // X positions of pipes
-   logic [5:0] pipe_gap_y[NUM_PIPES];    // Random height parameter for each pipe
-   logic pipe_active[NUM_PIPES];         // Whether each pipe is currently active
+   // Pipe state variables - using C file positions
+   // pipe 1
+   logic [9:0] pipe1_x;                  // X position of pipe 1
+   logic [5:0] pipe1_gap_y;              // Height parameter for pipe 1
+   logic [9:0] pipe1_gap_top;            // Top of gap for pipe 1
+   logic [9:0] pipe1_gap_bottom;         // Bottom of gap for pipe 1
    
-   // Pre-calculated gap centers and ranges for each pipe
-   logic [9:0] gap_center_0, gap_center_1, gap_center_2;
-   logic [9:0] gap_top_0, gap_bottom_0;
-   logic [9:0] gap_top_1, gap_bottom_1;
-   logic [9:0] gap_top_2, gap_bottom_2;
+   // pipe 2
+   logic [9:0] pipe2_x;                  // X position of pipe 2
+   logic [5:0] pipe2_gap_y;              // Height parameter for pipe 2
+   logic [9:0] pipe2_gap_top;            // Top of gap for pipe 2
+   logic [9:0] pipe2_gap_bottom;         // Bottom of gap for pipe 2
    
-   // Random number generation for gap heights
+   // pipe 3
+   logic [9:0] pipe3_x;                  // X position of pipe 3
+   logic [5:0] pipe3_gap_y;              // Height parameter for pipe 3
+   logic [9:0] pipe3_gap_top;            // Top of gap for pipe 3
+   logic [9:0] pipe3_gap_bottom;         // Bottom of gap for pipe 3
+   
+   // Random number generation
    logic [15:0] random_counter;
-   logic pipe_pixel;  // Indicates if current pixel is part of a pipe
    
-   // Pixel position test signals for individual pipes
-   logic pipe0_h_match, pipe1_h_match, pipe2_h_match;
-   logic pipe0_v_match, pipe1_v_match, pipe2_v_match;
+   // Pixel detection
+   logic pipe_pixel;
+   logic pipe1_hit, pipe2_hit, pipe3_hit;
    
    parameter BIRD_X = 100;
    parameter BIRD_WIDTH = 34;
@@ -81,6 +85,7 @@ module vga_ball(input logic        clk,
     
    parameter GRAVITY = 1;
    parameter FLAP_STRENGTH = -16;
+   parameter PIPE_GAP_HEIGHT = 120;  // Gap size
     
    // TEST MODE ADDITIONS
    logic [31:0] test_counter;
@@ -105,30 +110,13 @@ module vga_ball(input logic        clk,
      endcase
    end
    
-   // Simple pseudo-random number generator
+   // Function to get a random number between min and max
    function [5:0] get_random;
       input [15:0] seed;
       begin
-         // Simple XOR-shift for 6-bit random value (0-63)
-         get_random = (seed ^ (seed >> 7) ^ (seed >> 13)) & 6'h3F;
+         get_random = (seed ^ (seed >> 5) ^ (seed >> 9) ^ 16'h1234) % 41 + 5; // 5-45
       end
    endfunction
-   
-   // Pre-calculate gap boundaries in sequential logic
-   always_ff @(posedge clk) begin
-     // Calculate gap centers and boundaries for pipes
-     gap_center_0 <= pipe_gap_y[0] * 5 + 85;
-     gap_top_0 <= (pipe_gap_y[0] * 5 + 85) - PIPE_GAP_HEIGHT/2;
-     gap_bottom_0 <= (pipe_gap_y[0] * 5 + 85) + PIPE_GAP_HEIGHT/2;
-     
-     gap_center_1 <= pipe_gap_y[1] * 5 + 85;
-     gap_top_1 <= (pipe_gap_y[1] * 5 + 85) - PIPE_GAP_HEIGHT/2;
-     gap_bottom_1 <= (pipe_gap_y[1] * 5 + 85) + PIPE_GAP_HEIGHT/2;
-     
-     gap_center_2 <= pipe_gap_y[2] * 5 + 85;
-     gap_top_2 <= (pipe_gap_y[2] * 5 + 85) - PIPE_GAP_HEIGHT/2;
-     gap_bottom_2 <= (pipe_gap_y[2] * 5 + 85) + PIPE_GAP_HEIGHT/2;
-   end
     
    // === TEST MODE - Auto flap timer ===
    always_ff @(posedge clk) begin
@@ -151,41 +139,46 @@ module vga_ball(input logic        clk,
    // Pipe initialization and movement
    always_ff @(posedge clk) begin
       if (reset) begin
-         // Initialize random counter with non-zero seed
-         random_counter <= 16'h5A5A;
+         // Initialize random counter
+         random_counter <= 16'h1234;
          
-         // Set initial pipe positions based on the C code
-         pipe_x[0] <= 770;  // First pipe
-         pipe_x[1] <= 1028; // Second pipe
-         pipe_x[2] <= 1284; // Third pipe
+         // Initialize pipes with positions from C code
+         pipe1_x <= 770;
+         pipe2_x <= 1028;
+         pipe3_x <= 1284;
          
-         // Initialize random gap positions
-         for (int i = 0; i < NUM_PIPES; i++) begin
-            pipe_gap_y[i] <= 5 + get_random(16'h1234 + i*16'h5678) % 40; // Range 5-45
-            pipe_active[i] <= 1;
-         end
+         // Initialize random heights
+         pipe1_gap_y <= get_random(16'h1234);
+         pipe2_gap_y <= get_random(16'h5678);
+         pipe3_gap_y <= get_random(16'h9ABC);
       end else if (VGA_VS && !vsync_reg) begin
-         // Update random seed each frame
+         // Update random seed
          random_counter <= random_counter + 1;
          
-         // Update each pipe
-         for (int i = 0; i < NUM_PIPES; i++) begin
-            if (pipe_active[i]) begin
-               // Move pipe left
-               pipe_x[i] <= pipe_x[i] - PIPE_SPEED;
-               
-               // If pipe moves off screen, reset it
-               if (pipe_x[i] <= 1) begin
-                  pipe_x[i] <= PIPE_RESET_X;
-               end
-               
-               // Generate new random height when pipe reaches certain position
-               // Matching the C code's behavior
-               if (pipe_x[i] == 770) begin
-                  pipe_gap_y[i] <= 5 + get_random(random_counter + i) % 40; // Range 5-45
-               end
-            end
-         end
+         // Move pipes left
+         pipe1_x <= pipe1_x - PIPE_SPEED;
+         pipe2_x <= pipe2_x - PIPE_SPEED;
+         pipe3_x <= pipe3_x - PIPE_SPEED;
+         
+         // Reset pipes when they go off screen
+         if (pipe1_x <= 1) pipe1_x <= 780;
+         if (pipe2_x <= 1) pipe2_x <= 780;
+         if (pipe3_x <= 1) pipe3_x <= 780;
+         
+         // Generate new heights when pipes reach certain position
+         if (pipe1_x == 770) pipe1_gap_y <= get_random(random_counter);
+         if (pipe2_x == 770) pipe2_gap_y <= get_random(random_counter + 16'h1111);
+         if (pipe3_x == 770) pipe3_gap_y <= get_random(random_counter + 16'h2222);
+         
+         // Calculate gap positions for display
+         pipe1_gap_top <= pipe1_gap_y * 5 + 25;
+         pipe1_gap_bottom <= pipe1_gap_y * 5 + 145;
+         
+         pipe2_gap_top <= pipe2_gap_y * 5 + 25;
+         pipe2_gap_bottom <= pipe2_gap_y * 5 + 145;
+         
+         pipe3_gap_top <= pipe3_gap_y * 5 + 25;
+         pipe3_gap_bottom <= pipe3_gap_y * 5 + 145;
       end
    end
     
@@ -234,24 +227,23 @@ module vga_ball(input logic        clk,
      end
    end
 
-   // Simple horizontal position match logic
-   assign pipe0_h_match = (hcount[10:1] >= pipe_x[0] && hcount[10:1] < pipe_x[0] + PIPE_WIDTH) && pipe_active[0];
-   assign pipe1_h_match = (hcount[10:1] >= pipe_x[1] && hcount[10:1] < pipe_x[1] + PIPE_WIDTH) && pipe_active[1];
-   assign pipe2_h_match = (hcount[10:1] >= pipe_x[2] && hcount[10:1] < pipe_x[2] + PIPE_WIDTH) && pipe_active[2];
+   // Pipe pixel detection - Using simple assign statements
+   assign pipe1_hit = (hcount[10:1] >= pipe1_x) && (hcount[10:1] < pipe1_x + PIPE_WIDTH) && 
+                      ((vcount < pipe1_gap_top) || (vcount > pipe1_gap_bottom));
+                      
+   assign pipe2_hit = (hcount[10:1] >= pipe2_x) && (hcount[10:1] < pipe2_x + PIPE_WIDTH) && 
+                      ((vcount < pipe2_gap_top) || (vcount > pipe2_gap_bottom));
+                      
+   assign pipe3_hit = (hcount[10:1] >= pipe3_x) && (hcount[10:1] < pipe3_x + PIPE_WIDTH) && 
+                      ((vcount < pipe3_gap_top) || (vcount > pipe3_gap_bottom));
    
-   // Vertical position match logic (outside the gap)
-   assign pipe0_v_match = (vcount < gap_top_0 || vcount > gap_bottom_0);
-   assign pipe1_v_match = (vcount < gap_top_1 || vcount > gap_bottom_1);
-   assign pipe2_v_match = (vcount < gap_top_2 || vcount > gap_bottom_2);
-   
-   // Final pipe pixel detection
-   assign pipe_pixel = (pipe0_h_match && pipe0_v_match) || 
-                       (pipe1_h_match && pipe1_v_match) || 
-                       (pipe2_h_match && pipe2_v_match);
+   // Combined pipe detection
+   assign pipe_pixel = pipe1_hit || pipe2_hit || pipe3_hit;
 
    // Output color
    always_comb begin
       {VGA_R, VGA_G, VGA_B} = 24'h000000;
+      
       if (VGA_BLANK_n) begin
          if (pipe_pixel) begin
             // Pipe pixel - pure green
