@@ -224,12 +224,16 @@ module vga_ball(input logic        clk,
    endfunction
 
    // Output color
+   // 在 always_comb 块外定义变量
+   logic pipe_pixel;
+
+   // 然后在 always_comb 中使用
    always_comb begin
       {VGA_R, VGA_G, VGA_B} = 24'h000000;
       
+      pipe_pixel = 0;
+      
       if (VGA_BLANK_n) begin
-         logic pipe_pixel = 0;
-         
          // Check if current pixel is in any pipe
          for (int i = 0; i < NUM_PIPES; i++) begin
             if (pipe_active[i] && is_pipe_pixel(hcount[10:1], vcount, pipe_x[i], pipe_gap_y[i], pipe_gap_height[i])) begin
@@ -243,17 +247,17 @@ module vga_ball(input logic        clk,
             VGA_G = PIPE_COLOR_G;
             VGA_B = PIPE_COLOR_B;
          end else if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
-             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
-             bird_color != 8'h00) begin
-             // Bird pixel, apply R3 G3 B2 unpack
-             VGA_R = {bird_color[7:5], 5'b00000};
-             VGA_G = {bird_color[4:2], 5'b00000};
-             VGA_B = {bird_color[1:0], 6'b000000};
+               vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
+               bird_color != 8'h00) begin
+            // Bird pixel, apply R3 G3 B2 unpack
+            VGA_R = {bird_color[7:5], 5'b00000};
+            VGA_G = {bird_color[4:2], 5'b00000};
+            VGA_B = {bird_color[1:0], 6'b000000};
          end else begin
-             // Background pixel, apply B3 G3 R2 unpack
-             VGA_B = {bg_color[7:5], 5'b00000};
-             VGA_G = {bg_color[4:2], 5'b00000};
-             VGA_R = {bg_color[1:0], 6'b000000};
+            // Background pixel, apply B3 G3 R2 unpack
+            VGA_B = {bg_color[7:5], 5'b00000};
+            VGA_G = {bg_color[4:2], 5'b00000};
+            VGA_R = {bg_color[1:0], 6'b000000};
          end
       end
    end

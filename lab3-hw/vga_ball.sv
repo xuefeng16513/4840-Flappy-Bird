@@ -1,8 +1,7 @@
 /*
  * Avalon memory-mapped peripheral that generates VGA
  *
- * Modified for lab 3: Displays a movable square instead of a circle
- * to simplify debugging
+ * Modified for Flappy Bird game with moving pipes
  *
  * Register map:
  * 
@@ -46,8 +45,36 @@ module vga_ball(input logic        clk,
    // Simplified square drawing
    logic [21:0]    squared_distance; // (x-x0)² + (y-y0)²
    logic           is_ball;
+   
+   // Pipe parameters
+   parameter NUM_PIPES = 3;              // Number of pipes on screen at once
+   parameter PIPE_WIDTH = 70;            // Width of pipes in pixels
+   parameter PIPE_GAP_MIN = 120;         // Minimum gap between top and bottom pipes
+   parameter PIPE_GAP_MAX = 200;         // Maximum gap between top and bottom pipes
+   parameter PIPE_SPEED = 2;             // Pixels per frame the pipes move left
+   parameter PIPE_SPAWN_X = 640;         // X position where pipes spawn
+   parameter PIPE_DISTANCE = 250;        // Distance between consecutive pipes
+   
+   // Pipe state variables
+   logic [9:0] pipe_x[NUM_PIPES];        // X positions of pipes
+   logic [9:0] pipe_gap_y[NUM_PIPES];    // Y position of the center of each gap
+   logic [9:0] pipe_gap_height[NUM_PIPES]; // Height of the gap for each pipe
+   logic pipe_active[NUM_PIPES];         // Whether each pipe is currently active
+   
+   // Random number generation for gap heights
+   logic [15:0] random_counter;
+   logic is_pipe;  // Signal if current pixel is part of a pipe
 	
    vga_counters counters(.clk50(clk), .*);
+
+   // Function to generate pseudo-random number
+   function [9:0] get_random;
+      input [15:0] seed;
+      begin
+         // Simple LFSR-style random function
+         get_random = ((seed ^ (seed >> 7) ^ (seed >> 13)) & 10'h3FF);
+      end
+   endfunction
 
    always_ff @(posedge clk)
      if (reset) begin
@@ -57,6 +84,17 @@ module vga_ball(input logic        clk,
         ball_x <= 10'd320;
         ball_y <= 10'd240;
         ball_radius <= 8'd10;
+        
+        // Initialize random counter
+        random_counter <= 16'h1234;
+        
+        // Initialize pipes
+        for (int i = 0; i < NUM_PIPES; i++) begin
+            pipe_x[i] <= PIPE_SPAWN_X + i * PIPE_DISTANCE;
+            pipe_gap_height[i] <= PIPE_GAP_MIN + (get_random(16'h1234 + i) % (PIPE_GAP_MAX - PIPE_GAP_MIN));
+            pipe_gap_y[i] <= 100 + (get_random(16'h5678 + i) % 280); // Between 100-380
+            pipe_active[i] <= 1;
+        end
      end else if (chipselect && write)
        case (address)
 	 3'h0 : background_r <= writedata;
@@ -72,10 +110,31 @@ module vga_ball(input logic        clk,
    // Anti-tearing: Update display coordinates only during vertical blanking
    always_ff @(posedge clk) begin
        vsync_reg <= VGA_VS;
+       
        if (VGA_VS && !vsync_reg) begin // Rising edge of vsync
+         // Update bird position
          display_ball_x <= ball_x;
          display_ball_y <= ball_y;
          display_ball_radius <= ball_radius;
+         
+         // Update random seed
+         random_counter <= random_counter + 1;
+         
+         // Update pipe positions
+         for (int i = 0; i < NUM_PIPES; i++) begin
+            if (pipe_active[i]) begin
+               // Move pipe to the left
+               pipe_x[i] <= pipe_x[i] - PIPE_SPEED;
+               
+               // If pipe moves off screen, reset it with new random gap
+               if (pipe_x[i] <= 0) begin
+                  pipe_x[i] <= PIPE_SPAWN_X;
+                  // Use random values for gap height and position
+                  pipe_gap_height[i] <= PIPE_GAP_MIN + (get_random(random_counter + i) % (PIPE_GAP_MAX - PIPE_GAP_MIN));
+                  pipe_gap_y[i] <= 100 + (get_random(random_counter + i + 100) % 280); // Between 100-380
+               end
+            end
+         end
        end
      end
 
@@ -85,15 +144,35 @@ module vga_ball(input logic        clk,
      squared_distance = ({1'b0, hcount[10:1]} - {1'b0, display_ball_x}) * ({1'b0, hcount[10:1]} - {1'b0, display_ball_x}) + 
                         (vcount - display_ball_y) * (vcount - display_ball_y);
      is_ball = (squared_distance <= display_ball_radius * display_ball_radius);
+     
+     // Check if current pixel is part of a pipe
+     is_pipe = 0;
+     for (int i = 0; i < NUM_PIPES; i++) begin
+        if (pipe_active[i]) begin
+           // If within horizontal bounds of pipe
+           if (hcount[10:1] >= pipe_x[i] && hcount[10:1] < pipe_x[i] + PIPE_WIDTH) begin
+              // If NOT within the gap
+              if (vcount < pipe_gap_y[i] - pipe_gap_height[i]/2 || 
+                  vcount > pipe_gap_y[i] + pipe_gap_height[i]/2) begin
+                 is_pipe = 1;
+              end
+           end
+        end
+     end
    end
 
    always_comb begin
       {VGA_R, VGA_G, VGA_B} = {8'h0, 8'h0, 8'h0};
       if (VGA_BLANK_n) begin
-        if (is_ball)
-	  {VGA_R, VGA_G, VGA_B} = {8'hff, 8'hff, 8'hff}; // white color
-	else
-	  {VGA_R, VGA_G, VGA_B} = {background_r, background_g, background_b};
+        if (is_pipe)
+          // Pure green for pipes
+          {VGA_R, VGA_G, VGA_B} = {8'h00, 8'hC0, 8'h00};
+        else if (is_ball)
+	      // White for ball/bird
+	      {VGA_R, VGA_G, VGA_B} = {8'hff, 8'hff, 8'hff};
+	    else
+	      // Background color
+	      {VGA_R, VGA_G, VGA_B} = {background_r, background_g, background_b};
       end
    end
 	       
