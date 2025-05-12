@@ -16,18 +16,18 @@ module:
 	${MAKE} -C ${KERNEL_SOURCE} SUBDIRS=${PWD} modules
 
 hello: hello.c usbkeyboard.c
-	$(CC) hello.c usbkeyboard.c -lusb-1.0 -o hello
+	$(CC) -Wall hello.c usbkeyboard.c -lusb-1.0 -o hello
 
 clean:
 	${MAKE} -C ${KERNEL_SOURCE} SUBDIRS=${PWD} clean
 	${RM} hello
 
-TARFILES = Makefile README vga_ball.h vga_ball.c hello.c
-TARFILE = lab3-sw.tar.gz
+TARFILES = Makefile README vga_ball.h vga_ball.c hello.c usbkeyboard.c usbkeyboard.h
+TARFILE = flappybird.tar.gz
 .PHONY : tar
 tar : $(TARFILE)
 
 $(TARFILE) : $(TARFILES)
 	tar zcfC $(TARFILE) .. $(TARFILES:%=lab3-sw/%)
 
-endif 
+endif
