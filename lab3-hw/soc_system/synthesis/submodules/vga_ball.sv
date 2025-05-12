@@ -49,11 +49,11 @@ module vga_ball(input logic        clk,
    // Pipe parameters
    parameter NUM_PIPES = 3;              // Number of pipes on screen at once
    parameter PIPE_WIDTH = 70;            // Width of pipes in pixels
-   parameter PIPE_GAP_MIN = 150;         // Minimum gap between top and bottom pipes
-   parameter PIPE_GAP_MAX = 250;         // Maximum gap between top and bottom pipes
+   parameter PIPE_GAP_MIN = 120;         // Minimum gap between top and bottom pipes
+   parameter PIPE_GAP_MAX = 200;         // Maximum gap between top and bottom pipes
    parameter PIPE_SPEED = 2;             // Pixels per frame the pipes move left
    parameter PIPE_SPAWN_X = 640;         // X position where pipes spawn
-   parameter PIPE_DISTANCE = 300;        // Distance between consecutive pipes
+   parameter PIPE_DISTANCE = 250;        // Distance between consecutive pipes
    parameter PIPE_COLOR_R = 8'h00;       // Pipe color (Red) - pure green pipes
    parameter PIPE_COLOR_G = 8'hC0;       // Pipe color (Green)
    parameter PIPE_COLOR_B = 8'h00;       // Pipe color (Blue)
@@ -65,7 +65,8 @@ module vga_ball(input logic        clk,
    logic pipe_active[NUM_PIPES];         // Whether each pipe is currently active
    
    // Random number generation for gap heights
-   logic [9:0] random_counter;
+   logic [15:0] random_counter;
+   logic pipe_pixel;  // Indicates if current pixel is part of a pipe
    
    parameter BIRD_X = 100;
    parameter BIRD_WIDTH = 34;
@@ -97,12 +98,18 @@ module vga_ball(input logic        clk,
      endcase
    end
    
-   // Function to generate a pseudo-random number based on counter
-   function [9:0] get_random_gap;
-      input [9:0] seed;
+   // Improved random number generator function
+   function [9:0] get_random;
+      input [15:0] seed;
+      input [9:0] min_val;
+      input [9:0] max_val;
+      logic [15:0] temp;
       begin
-         // Simple LFSR-like function to generate pseudo-random numbers
-         get_random_gap = (seed ^ (seed << 3) ^ (seed >> 5)) % (PIPE_GAP_MAX - PIPE_GAP_MIN) + PIPE_GAP_MIN;
+         // Use a better pseudo-random number algorithm
+         temp = seed ^ (seed << 5) ^ (seed >> 3) ^ 16'h1234;
+         
+         // Ensure we stay within min and max values
+         get_random = min_val + (temp % (max_val - min_val + 1));
       end
    endfunction
     
@@ -127,17 +134,21 @@ module vga_ball(input logic        clk,
    // Pipe initialization and movement
    always_ff @(posedge clk) begin
       if (reset) begin
-         random_counter <= 10'd1;  // Non-zero seed for random generator
+         // Initialize random counter with non-zero seed
+         random_counter <= 16'h5A5A;
          
-         // Initialize pipes with different positions
+         // Initialize pipes with fixed spacing
          for (int i = 0; i < NUM_PIPES; i++) begin
             pipe_x[i] <= PIPE_SPAWN_X + i * PIPE_DISTANCE;
-            pipe_gap_height[i] <= PIPE_GAP_MIN;
-            pipe_gap_y[i] <= 240;  // Center initially
-            pipe_active[i] <= 1;   // All pipes active
+            // Ensure gap heights are always between MIN and MAX
+            pipe_gap_height[i] <= get_random(16'h1234 + i*16'h5678, PIPE_GAP_MIN, PIPE_GAP_MAX);
+            // Ensure gap positions are reasonable (not too close to top/bottom)
+            pipe_gap_y[i] <= get_random(16'h9ABC + i*16'h3456, 10'd120, 10'd360);
+            pipe_active[i] <= 1;
          end
       end else if (VGA_VS && !vsync_reg) begin
-         random_counter <= random_counter + 1;  // Increment random seed
+         // Update random counter with a different value each frame
+         random_counter <= random_counter + 16'h1B + bird_y[3:0];
          
          // Update each pipe
          for (int i = 0; i < NUM_PIPES; i++) begin
@@ -148,8 +159,12 @@ module vga_ball(input logic        clk,
                // If pipe moves off screen, reset it
                if (pipe_x[i] <= 0) begin
                   pipe_x[i] <= PIPE_SPAWN_X;
-                  pipe_gap_height[i] <= get_random_gap(random_counter);
-                  pipe_gap_y[i] <= 100 + (random_counter % 280);  // Random gap position
+                  
+                  // Generate guaranteed valid gap height
+                  pipe_gap_height[i] <= get_random(random_counter + i*16'h1234, PIPE_GAP_MIN, PIPE_GAP_MAX);
+                  
+                  // Generate position for gap center (avoiding extremes)
+                  pipe_gap_y[i] <= get_random(random_counter + i*16'h5678 + 16'h9ABC, 10'd120, 10'd360);
                end
             end
          end
@@ -201,63 +216,47 @@ module vga_ball(input logic        clk,
      end
    end
 
-   // Helper function to check if current pixel is inside a pipe
-   function is_pipe_pixel;
-      input [10:0] h_pos;  // Current horizontal position
-      input [9:0] v_pos;   // Current vertical position
-      input [9:0] pipe_x_pos;  // Pipe's x position
-      input [9:0] gap_y;   // Gap center y position
-      input [9:0] gap_h;   // Gap height
-      begin
-         // Check if within pipe's horizontal bounds
-         if (h_pos >= pipe_x_pos && h_pos < pipe_x_pos + PIPE_WIDTH) begin
-            // Check if NOT within the gap
-            if (v_pos < gap_y - gap_h/2 || v_pos > gap_y + gap_h/2) begin
-               is_pipe_pixel = 1;
-            end else begin
-               is_pipe_pixel = 0;
-            end
-         end else begin
-            is_pipe_pixel = 0;
-         end
-      end
-   endfunction
-
-   // Output color
-   // 在 always_comb 块外定义变量
-   logic pipe_pixel;
-
-   // 然后在 always_comb 中使用
+   // Check if current pixel is inside a pipe
    always_comb begin
-      {VGA_R, VGA_G, VGA_B} = 24'h000000;
-      
+      // Initialize pipe_pixel
       pipe_pixel = 0;
       
-      if (VGA_BLANK_n) begin
-         // Check if current pixel is in any pipe
-         for (int i = 0; i < NUM_PIPES; i++) begin
-            if (pipe_active[i] && is_pipe_pixel(hcount[10:1], vcount, pipe_x[i], pipe_gap_y[i], pipe_gap_height[i])) begin
-               pipe_pixel = 1;
+      // Check for each pipe
+      for (int i = 0; i < NUM_PIPES; i++) begin
+         if (pipe_active[i]) begin
+            // Check if within pipe's horizontal bounds
+            if (hcount[10:1] >= pipe_x[i] && hcount[10:1] < pipe_x[i] + PIPE_WIDTH) begin
+               // Check if NOT within the gap
+               if (vcount < pipe_gap_y[i] - pipe_gap_height[i]/2 || 
+                   vcount > pipe_gap_y[i] + pipe_gap_height[i]/2) begin
+                  pipe_pixel = 1;
+               end
             end
          end
-         
+      end
+   end
+
+   // Output color
+   always_comb begin
+      {VGA_R, VGA_G, VGA_B} = 24'h000000;
+      if (VGA_BLANK_n) begin
          if (pipe_pixel) begin
             // Pipe pixel - pure green
             VGA_R = PIPE_COLOR_R;
             VGA_G = PIPE_COLOR_G;
             VGA_B = PIPE_COLOR_B;
          end else if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
-               vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
-               bird_color != 8'h00) begin
-            // Bird pixel, apply R3 G3 B2 unpack
-            VGA_R = {bird_color[7:5], 5'b00000};
-            VGA_G = {bird_color[4:2], 5'b00000};
-            VGA_B = {bird_color[1:0], 6'b000000};
+             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
+             bird_color != 8'h00) begin
+             // Bird pixel, apply R3 G3 B2 unpack
+             VGA_R = {bird_color[7:5], 5'b00000};
+             VGA_G = {bird_color[4:2], 5'b00000};
+             VGA_B = {bird_color[1:0], 6'b000000};
          end else begin
-            // Background pixel, apply B3 G3 R2 unpack
-            VGA_B = {bg_color[7:5], 5'b00000};
-            VGA_G = {bg_color[4:2], 5'b00000};
-            VGA_R = {bg_color[1:0], 6'b000000};
+             // Background pixel, apply B3 G3 R2 unpack
+             VGA_B = {bg_color[7:5], 5'b00000};
+             VGA_G = {bg_color[4:2], 5'b00000};
+             VGA_R = {bg_color[1:0], 6'b000000};
          end
       end
    end
