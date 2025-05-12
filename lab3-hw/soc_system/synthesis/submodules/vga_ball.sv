@@ -29,6 +29,13 @@ module vga_ball(input logic        clk,
                                    VGA_BLANK_n,
                 output logic       VGA_SYNC_n);
 
+   // 游戏状态定义
+   typedef enum logic [1:0] {
+      GAME_START,    // 显示开始画面
+      GAME_PLAYING,  // 游戏进行中
+      GAME_OVER      // 游戏结束
+   } game_state_t;
+
    logic [10:0]    hcount;
    logic [9:0]     vcount;
 
@@ -37,7 +44,11 @@ module vga_ball(input logic        clk,
    logic [1:0] bird_frame;  // 2-bit index for animation frame (0,1,2)
    logic [7:0] animation_counter;
    logic vsync_reg;
-   logic game_started;
+   
+   // 新增游戏状态变量
+   game_state_t game_state;
+   logic [18:0] start_screen_addr;
+   logic [7:0] start_screen_color;
 
    logic [18:0] bg_addr;
    logic [7:0] bg_color;
@@ -60,6 +71,9 @@ module vga_ball(input logic        clk,
    vga_counters counters(.clk50(clk), .*);
     
    bg_rom bg_rom_inst (.address(bg_addr), .clock(clk), .data(8'b0), .wren(1'b0), .q(bg_color));
+   
+   // 实例化开始画面ROM
+   start_screen_rom start_screen_inst (.address(start_screen_addr), .clock(clk), .q(start_screen_color));
      
    // Bird sprite ROMs (one per frame)
    bird_rom0 bird0 (.address(bird_addr), .clock(clk), .q(bird_color0));
@@ -81,7 +95,7 @@ module vga_ball(input logic        clk,
      if (reset) begin
         test_counter <= 0;
         flap_latched <= 0;
-        game_started <= 1; // Start game immediately for testing
+        game_state <= GAME_START; // 在测试模式下从开始画面开始
      end else begin
         // Auto-flap timer - triggers flap every TEST_INTERVAL cycles
         test_counter <= test_counter + 1;
@@ -89,14 +103,16 @@ module vga_ball(input logic        clk,
            test_counter <= 0;
            flap_latched <= 1;
         end else if (VGA_VS && !vsync_reg) begin
-           flap_latched <= 0; // Reset flap after consumed during vsync
+           // 游戏逻辑会在vsync时处理flap_latched
         end
      end
    end
     
    // Address calculation
    always_comb begin
+       // 始终计算所有地址，但在输出时根据游戏状态选择
        bg_addr = vcount * 640 + hcount[10:1];
+       start_screen_addr = vcount * 640 + hcount[10:1];
 
        if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
            vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
@@ -115,27 +131,55 @@ module vga_ball(input logic        clk,
         bird_velocity <= 0;
         bird_frame <= 0;
         animation_counter <= 0;
+        game_state <= GAME_START;  // 重置时回到开始画面
      end else if (VGA_VS && !vsync_reg) begin
-        animation_counter <= animation_counter + 1;
-        if (animation_counter == 10) begin
-           animation_counter <= 0;
-           bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
-        end
-        
-        // TEST MODE - Always in game state
-        // Apply flap if flap_latched is set
-        if (flap_latched) begin
-           bird_velocity <= FLAP_STRENGTH;
-        end else begin
-           bird_velocity <= bird_velocity + GRAVITY;
-        end
+        // 处理游戏状态变化
+        case (game_state)
+           GAME_START: begin
+              // 检测flap输入以开始游戏
+              if (flap_latched) begin
+                 game_state <= GAME_PLAYING;
+                 flap_latched <= 0;
+              end
+           end
+           
+           GAME_PLAYING: begin
+              // 鸟的动画和物理计算
+              animation_counter <= animation_counter + 1;
+              if (animation_counter == 10) begin
+                 animation_counter <= 0;
+                 bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
+              end
+              
+              // 处理鸟的跳跃
+              if (flap_latched) begin
+                 bird_velocity <= FLAP_STRENGTH;
+                 flap_latched <= 0;
+              end else begin
+                 bird_velocity <= bird_velocity + GRAVITY;
+              end
 
-        // Update bird position
-        bird_y <= bird_y + bird_velocity;
-        
-        // Boundary checks
-        if (bird_y < 0) bird_y <= 0;
-        if (bird_y > 480 - BIRD_HEIGHT) bird_y <= 480 - BIRD_HEIGHT;
+              // 更新鸟的位置
+              bird_y <= bird_y + bird_velocity;
+              
+              // 边界检查
+              if (bird_y < 0) bird_y <= 0;
+              if (bird_y > 480 - BIRD_HEIGHT) begin
+                 bird_y <= 480 - BIRD_HEIGHT;
+                 game_state <= GAME_OVER;
+              end
+           end
+           
+           GAME_OVER: begin
+              // 游戏结束状态，检测flap输入重新开始
+              if (flap_latched) begin
+                 game_state <= GAME_START;
+                 bird_y <= 240;
+                 bird_velocity <= 0;
+                 flap_latched <= 0;
+              end
+           end
+        endcase
      end
    end
 
@@ -143,19 +187,31 @@ module vga_ball(input logic        clk,
    always_comb begin
       {VGA_R, VGA_G, VGA_B} = 24'h000000;
       if (VGA_BLANK_n) begin
-         if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
-             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
-             bird_color != 8'h00) begin
-             // Bird pixel, apply R3 G3 B2 unpack
-             VGA_R = {bird_color[7:5], 5'b00000};
-             VGA_G = {bird_color[4:2], 5'b00000};
-             VGA_B = {bird_color[1:0], 6'b000000};
-         end else begin
-             // Background pixel, apply B3 G3 R2 unpack
-             VGA_B = {bg_color[7:5], 5'b00000};
-             VGA_G = {bg_color[4:2], 5'b00000};
-             VGA_R = {bg_color[1:0], 6'b000000};
-         end
+         case (game_state)
+            GAME_START: begin
+               // 在开始画面状态，显示开始画面
+               // 这里假设开始画面ROM使用B3G3R2格式，需根据实际调整
+               VGA_B = {start_screen_color[7:5], 5'b00000};
+               VGA_G = {start_screen_color[4:2], 5'b00000};
+               VGA_R = {start_screen_color[1:0], 6'b000000};
+            end
+            
+            default: begin // GAME_PLAYING 或 GAME_OVER
+               if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
+                   vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
+                   bird_color != 8'h00) begin
+                   // Bird pixel, apply R3 G3 B2 unpack
+                   VGA_R = {bird_color[7:5], 5'b00000};
+                   VGA_G = {bird_color[4:2], 5'b00000};
+                   VGA_B = {bird_color[1:0], 6'b000000};
+               end else begin
+                   // Background pixel, apply B3 G3 R2 unpack
+                   VGA_B = {bg_color[7:5], 5'b00000};
+                   VGA_G = {bg_color[4:2], 5'b00000};
+                   VGA_R = {bg_color[1:0], 6'b000000};
+               end
+            end
+         endcase
       end
    end
          
