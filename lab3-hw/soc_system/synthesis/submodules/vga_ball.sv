@@ -49,19 +49,16 @@ module vga_ball(input logic        clk,
    // Pipe parameters
    parameter NUM_PIPES = 3;              // Number of pipes on screen at once
    parameter PIPE_WIDTH = 70;            // Width of pipes in pixels
-   parameter PIPE_GAP_MIN = 120;         // Minimum gap between top and bottom pipes
-   parameter PIPE_GAP_MAX = 200;         // Maximum gap between top and bottom pipes
+   parameter PIPE_GAP_HEIGHT = 120;      // Gap between top and bottom pipes
    parameter PIPE_SPEED = 2;             // Pixels per frame the pipes move left
-   parameter PIPE_SPAWN_X = 640;         // X position where pipes spawn
-   parameter PIPE_DISTANCE = 250;        // Distance between consecutive pipes
+   parameter PIPE_RESET_X = 780;         // X position where pipes reset to
    parameter PIPE_COLOR_R = 8'h00;       // Pipe color (Red) - pure green pipes
    parameter PIPE_COLOR_G = 8'hC0;       // Pipe color (Green)
    parameter PIPE_COLOR_B = 8'h00;       // Pipe color (Blue)
    
    // Pipe state variables
    logic [9:0] pipe_x[NUM_PIPES];        // X positions of pipes
-   logic [9:0] pipe_gap_y[NUM_PIPES];    // Y position of the center of each gap
-   logic [9:0] pipe_gap_height[NUM_PIPES]; // Height of the gap for each pipe
+   logic [5:0] pipe_gap_y[NUM_PIPES];    // Random height parameter for each pipe
    logic pipe_active[NUM_PIPES];         // Whether each pipe is currently active
    
    // Random number generation for gap heights
@@ -98,18 +95,12 @@ module vga_ball(input logic        clk,
      endcase
    end
    
-   // Improved random number generator function
-   function [9:0] get_random;
+   // Simple pseudo-random number generator
+   function [5:0] get_random;
       input [15:0] seed;
-      input [9:0] min_val;
-      input [9:0] max_val;
-      logic [15:0] temp;
       begin
-         // Use a better pseudo-random number algorithm
-         temp = seed ^ (seed << 5) ^ (seed >> 3) ^ 16'h1234;
-         
-         // Ensure we stay within min and max values
-         get_random = min_val + (temp % (max_val - min_val + 1));
+         // Simple XOR-shift for 6-bit random value (0-63)
+         get_random = (seed ^ (seed >> 7) ^ (seed >> 13)) & 6'h3F;
       end
    endfunction
     
@@ -137,18 +128,19 @@ module vga_ball(input logic        clk,
          // Initialize random counter with non-zero seed
          random_counter <= 16'h5A5A;
          
-         // Initialize pipes with fixed spacing
+         // Set initial pipe positions based on the C code
+         pipe_x[0] <= 770;  // First pipe
+         pipe_x[1] <= 1028; // Second pipe
+         pipe_x[2] <= 1284; // Third pipe
+         
+         // Initialize random gap positions
          for (int i = 0; i < NUM_PIPES; i++) begin
-            pipe_x[i] <= PIPE_SPAWN_X + i * PIPE_DISTANCE;
-            // Ensure gap heights are always between MIN and MAX
-            pipe_gap_height[i] <= get_random(16'h1234 + i*16'h5678, PIPE_GAP_MIN, PIPE_GAP_MAX);
-            // Ensure gap positions are reasonable (not too close to top/bottom)
-            pipe_gap_y[i] <= get_random(16'h9ABC + i*16'h3456, 10'd120, 10'd360);
+            pipe_gap_y[i] <= 5 + get_random(16'h1234 + i*16'h5678) % 40; // Range 5-45
             pipe_active[i] <= 1;
          end
       end else if (VGA_VS && !vsync_reg) begin
-         // Update random counter with a different value each frame
-         random_counter <= random_counter + 16'h1B + bird_y[3:0];
+         // Update random seed each frame
+         random_counter <= random_counter + 1;
          
          // Update each pipe
          for (int i = 0; i < NUM_PIPES; i++) begin
@@ -157,14 +149,14 @@ module vga_ball(input logic        clk,
                pipe_x[i] <= pipe_x[i] - PIPE_SPEED;
                
                // If pipe moves off screen, reset it
-               if (pipe_x[i] <= 0) begin
-                  pipe_x[i] <= PIPE_SPAWN_X;
-                  
-                  // Generate guaranteed valid gap height
-                  pipe_gap_height[i] <= get_random(random_counter + i*16'h1234, PIPE_GAP_MIN, PIPE_GAP_MAX);
-                  
-                  // Generate position for gap center (avoiding extremes)
-                  pipe_gap_y[i] <= get_random(random_counter + i*16'h5678 + 16'h9ABC, 10'd120, 10'd360);
+               if (pipe_x[i] <= 1) begin
+                  pipe_x[i] <= PIPE_RESET_X;
+               end
+               
+               // Generate new random height when pipe reaches certain position
+               // Matching the C code's behavior
+               if (pipe_x[i] == 770) begin
+                  pipe_gap_y[i] <= 5 + get_random(random_counter + i) % 40; // Range 5-45
                end
             end
          end
@@ -224,11 +216,15 @@ module vga_ball(input logic        clk,
       // Check for each pipe
       for (int i = 0; i < NUM_PIPES; i++) begin
          if (pipe_active[i]) begin
+            // Calculate gap center and size based on the gap_y parameter
+            // This matches the C code's calculation: hPillar*5+25 to hPillar*5+145
+            logic [9:0] gap_center = pipe_gap_y[i] * 5 + 85; // Center of the gap
+            
             // Check if within pipe's horizontal bounds
             if (hcount[10:1] >= pipe_x[i] && hcount[10:1] < pipe_x[i] + PIPE_WIDTH) begin
-               // Check if NOT within the gap
-               if (vcount < pipe_gap_y[i] - pipe_gap_height[i]/2 || 
-                   vcount > pipe_gap_y[i] + pipe_gap_height[i]/2) begin
+               // Check if NOT within the gap (pipe_gap_y[i]*5+25 to pipe_gap_y[i]*5+145)
+               if (vcount < gap_center - PIPE_GAP_HEIGHT/2 || 
+                   vcount > gap_center + PIPE_GAP_HEIGHT/2) begin
                   pipe_pixel = 1;
                end
             end
