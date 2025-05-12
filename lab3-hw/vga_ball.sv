@@ -1,7 +1,6 @@
 /*
  * Avalon memory-mapped peripheral that generates VGA
- *
- * Modified for Flappy Bird game with moving pipes
+ * Modified for Flappy Bird game implementation with audio
  *
  * Register map:
  * 
@@ -14,180 +13,362 @@
  *        5    |  Y[7:0]|  Ball Y position (low 8 bits)
  *        6    |  Y[9:8]|  Ball Y position (high 2 bits)
  *        7    | Radius |  Ball radius (in pixels)
+ *        8    |  FLAP  |  Bird flap trigger (bit 0)
  */
 
 module vga_ball(input logic        clk,
-	        input logic 	   reset,
-		input logic [7:0]  writedata,
-		input logic 	   write,
-		input 		   chipselect,
-		input logic [2:0]  address,
+                input logic        reset,
+                input logic [7:0]  writedata,
+                input logic        write,
+                input              chipselect,
+                input logic [3:0]  address,
+                input       [3:0]  KEY, // Added for audio control
+                input       [3:0]  SW,  // Added for audio control
 
-		output logic [7:0] VGA_R, VGA_G, VGA_B,
-		output logic 	   VGA_CLK, VGA_HS, VGA_VS,
-		                   VGA_BLANK_n,
-		output logic 	   VGA_SYNC_n);
+                output logic [7:0] VGA_R, VGA_G, VGA_B,
+                output logic       VGA_CLK, VGA_HS, VGA_VS,
+                                   VGA_BLANK_n,
+                output logic       VGA_SYNC_n,
+                
+                // Added audio interface
+                inout              AUD_ADCLRCK,
+                input              AUD_ADCDAT,
+                inout              AUD_DACLRCK,
+                output             AUD_DACDAT,
+                output             AUD_XCK,
+                inout              AUD_BCLK,
+                output             AUD_I2C_SCLK,
+                inout              AUD_I2C_SDAT,
+                output             AUD_MUTE,
+                output      [3:0]  LED);
 
-   logic [10:0]	   hcount;
+   logic [10:0]    hcount;
    logic [9:0]     vcount;
 
-   logic [7:0] 	   background_r, background_g, background_b;
+   logic [9:0] bird_y;
+   logic signed [9:0] bird_velocity;
+   logic [1:0] bird_frame;  // 2-bit index for animation frame (0,1,2)
+   logic [7:0] animation_counter;
+   logic vsync_reg;
+   logic game_started;
 
-   // Ball position and properties
-   logic [9:0]     ball_x, ball_y;
-   logic [7:0]     ball_radius;
-   
-   // For anti-tearing
-   logic [9:0]     display_ball_x, display_ball_y;
-   logic [7:0]     display_ball_radius;
-   logic           vsync_reg;
-   
-   // Simplified square drawing
-   logic [21:0]    squared_distance; // (x-x0)² + (y-y0)²
-   logic           is_ball;
-   
+   logic [18:0] bg_addr;
+   logic [7:0] bg_color;
+
+   logic [11:0] bird_addr;
+   logic [7:0] bird_color;
+   logic flap_latched;
+
    // Pipe parameters
-   parameter NUM_PIPES = 3;              // Number of pipes on screen at once
    parameter PIPE_WIDTH = 70;            // Width of pipes in pixels
-   parameter PIPE_GAP_MIN = 120;         // Minimum gap between top and bottom pipes
-   parameter PIPE_GAP_MAX = 200;         // Maximum gap between top and bottom pipes
    parameter PIPE_SPEED = 2;             // Pixels per frame the pipes move left
-   parameter PIPE_SPAWN_X = 640;         // X position where pipes spawn
-   parameter PIPE_DISTANCE = 250;        // Fixed distance between consecutive pipes
+   parameter PIPE_COLOR_R = 8'h00;       // Pipe color (Red) - pure green pipes
+   parameter PIPE_COLOR_G = 8'hC0;       // Pipe color (Green)
+   parameter PIPE_COLOR_B = 8'h00;       // Pipe color (Blue)
    
-   // Pipe state variables
-   logic [9:0] pipe_x[NUM_PIPES];        // X positions of pipes
-   logic [9:0] pipe_gap_y[NUM_PIPES];    // Y position of the center of each gap
-   logic [9:0] pipe_gap_height[NUM_PIPES]; // Height of the gap for each pipe
-   logic pipe_active[NUM_PIPES];         // Whether each pipe is currently active
+   // Pipe state variables - using C file positions
+   // pipe 1
+   logic [9:0] pipe1_x;                  // X position of pipe 1
+   logic [5:0] pipe1_gap_y;              // Height parameter for pipe 1
+   logic [9:0] pipe1_gap_top;            // Top of gap for pipe 1
+   logic [9:0] pipe1_gap_bottom;         // Bottom of gap for pipe 1
    
-   // Random number generation for gap heights
+   // pipe 2
+   logic [9:0] pipe2_x;                  // X position of pipe 2
+   logic [5:0] pipe2_gap_y;              // Height parameter for pipe 2
+   logic [9:0] pipe2_gap_top;            // Top of gap for pipe 2
+   logic [9:0] pipe2_gap_bottom;         // Bottom of gap for pipe 2
+   
+   // pipe 3
+   logic [9:0] pipe3_x;                  // X position of pipe 3
+   logic [5:0] pipe3_gap_y;              // Height parameter for pipe 3
+   logic [9:0] pipe3_gap_top;            // Top of gap for pipe 3
+   logic [9:0] pipe3_gap_bottom;         // Bottom of gap for pipe 3
+   
+   // Random number generation
    logic [15:0] random_counter;
-   logic is_pipe;  // Signal if current pixel is part of a pipe
-	
+   
+   // Pixel detection
+   logic pipe_pixel;
+   logic pipe1_hit, pipe2_hit, pipe3_hit;
+   
+   parameter BIRD_X = 100;
+   parameter BIRD_WIDTH = 34;
+   parameter BIRD_HEIGHT = 24;
+    
+   parameter GRAVITY = 1;
+   parameter FLAP_STRENGTH = -16;
+   parameter PIPE_GAP_HEIGHT = 120;  // Gap size
+    
+   // TEST MODE ADDITIONS
+   logic [31:0] test_counter;
+   parameter TEST_INTERVAL = 50000000; // About 1 second at 50 MHz
+    
    vga_counters counters(.clk50(clk), .*);
+    
+   bg_rom bg_rom_inst (.address(bg_addr), .clock(clk), .data(8'b0), .wren(1'b0), .q(bg_color));
+     
+   // Bird sprite ROMs (one per frame)
+   bird_rom0 bird0 (.address(bird_addr), .clock(clk), .q(bird_color0));
+   bird_rom1 bird1 (.address(bird_addr), .clock(clk), .q(bird_color1));
+   bird_rom2 bird2 (.address(bird_addr), .clock(clk), .q(bird_color2));
 
-   // Improved random number generator function
-   function [9:0] get_random;
+   logic [7:0] bird_color0, bird_color1, bird_color2;
+   always_comb begin
+     case (bird_frame)
+        2'd0: bird_color = bird_color0;
+        2'd1: bird_color = bird_color1;
+        2'd2: bird_color = bird_color2;
+        default: bird_color = bird_color0;
+     endcase
+   end
+   
+   // Function to get a random number between min and max
+   function [5:0] get_random;
       input [15:0] seed;
-      input [9:0] min_val;
-      input [9:0] max_val;
-      logic [15:0] temp;
       begin
-         // Use a better pseudo-random number algorithm
-         temp = seed ^ (seed << 5) ^ (seed >> 3) ^ 16'h1234;
-         
-         // Ensure we stay within min and max values
-         // The modulo operation ensures we get a value between 0 and (max-min)
-         get_random = min_val + (temp % (max_val - min_val + 1));
+         get_random = (seed ^ (seed >> 5) ^ (seed >> 9) ^ 16'h1234) % 41 + 5; // 5-45
       end
    endfunction
-
-   always_ff @(posedge clk)
-     if (reset) begin
-	background_r <= 8'h0;
-	background_g <= 8'h0;
-	background_b <= 8'h80;
-        ball_x <= 10'd320;
-        ball_y <= 10'd240;
-        ball_radius <= 8'd10;
-        
-        // Initialize random counter with non-zero seed
-        random_counter <= 16'h5A5A;
-        
-        // Initialize pipes with fixed spacing
-        for (int i = 0; i < NUM_PIPES; i++) begin
-            pipe_x[i] <= PIPE_SPAWN_X + i * PIPE_DISTANCE;
-            // Ensure gap heights are always between MIN and MAX
-            pipe_gap_height[i] <= get_random(16'h1234 + i*16'h5678, PIPE_GAP_MIN, PIPE_GAP_MAX);
-            // Ensure gap positions are reasonable (not too close to top/bottom)
-            pipe_gap_y[i] <= get_random(16'h9ABC + i*16'h3456, 10'd120, 10'd360);
-            pipe_active[i] <= 1;
-        end
-     end else if (chipselect && write)
-       case (address)
-	 3'h0 : background_r <= writedata;
-	 3'h1 : background_g <= writedata;
-	 3'h2 : background_b <= writedata;
-         3'h3 : ball_x[7:0] <= writedata;
-         3'h4 : ball_x[9:8] <= writedata[1:0];
-         3'h5 : ball_y[7:0] <= writedata;
-         3'h6 : ball_y[9:8] <= writedata[1:0];
-         3'h7 : ball_radius <= writedata;
-       endcase
-
-   // Anti-tearing: Update display coordinates only during vertical blanking
+    
+   // === TEST MODE - Auto flap timer ===
    always_ff @(posedge clk) begin
-       vsync_reg <= VGA_VS;
-       
-       if (VGA_VS && !vsync_reg) begin // Rising edge of vsync
-         // Update bird position
-         display_ball_x <= ball_x;
-         display_ball_y <= ball_y;
-         display_ball_radius <= ball_radius;
-         
-         // Update random seed with a different value each frame
-         random_counter <= random_counter + 16'h1B + display_ball_y[3:0];
-         
-         // Update pipe positions
-         for (int i = 0; i < NUM_PIPES; i++) begin
-            if (pipe_active[i]) begin
-               // Move pipe to the left
-               pipe_x[i] <= pipe_x[i] - PIPE_SPEED;
-               
-               // If pipe moves off screen, reset it with new random gap
-               if (pipe_x[i] <= 0) begin
-                  pipe_x[i] <= PIPE_SPAWN_X;
-                  
-                  // Generate guaranteed valid gap height
-                  pipe_gap_height[i] <= get_random(random_counter + i*16'h1234, PIPE_GAP_MIN, PIPE_GAP_MAX);
-                  
-                  // Generate position for gap center (avoiding extremes)
-                  pipe_gap_y[i] <= get_random(random_counter + i*16'h5678 + 16'h9ABC, 10'd120, 10'd360);
-               end
-            end
-         end
-       end
-     end
-
-   // Calculate squared distance for circle equation
-   always_comb begin
-     // Use hcount[10:1] for proper pixel column
-     squared_distance = ({1'b0, hcount[10:1]} - {1'b0, display_ball_x}) * ({1'b0, hcount[10:1]} - {1'b0, display_ball_x}) + 
-                        (vcount - display_ball_y) * (vcount - display_ball_y);
-     is_ball = (squared_distance <= display_ball_radius * display_ball_radius);
-     
-     // Check if current pixel is part of a pipe
-     is_pipe = 0;
-     for (int i = 0; i < NUM_PIPES; i++) begin
-        if (pipe_active[i]) begin
-           // If within horizontal bounds of pipe
-           if (hcount[10:1] >= pipe_x[i] && hcount[10:1] < pipe_x[i] + PIPE_WIDTH) begin
-              // If NOT within the gap
-              if (vcount < pipe_gap_y[i] - pipe_gap_height[i]/2 || 
-                  vcount > pipe_gap_y[i] + pipe_gap_height[i]/2) begin
-                 is_pipe = 1;
-              end
-           end
+     if (reset) begin
+        test_counter <= 0;
+        flap_latched <= 0;
+        game_started <= 1; // Start game immediately for testing
+     end else begin
+        // Auto-flap timer - triggers flap every TEST_INTERVAL cycles
+        test_counter <= test_counter + 1;
+        if (test_counter >= TEST_INTERVAL) begin
+           test_counter <= 0;
+           flap_latched <= 1;
+        end else if (VGA_VS && !vsync_reg) begin
+           flap_latched <= 0; // Reset flap after consumed during vsync
         end
      end
    end
-
-   always_comb begin
-      {VGA_R, VGA_G, VGA_B} = {8'h0, 8'h0, 8'h0};
-      if (VGA_BLANK_n) begin
-        if (is_pipe)
-          // Pure green for pipes
-          {VGA_R, VGA_G, VGA_B} = {8'h00, 8'hC0, 8'h00};
-        else if (is_ball)
-	      // White for ball/bird
-	      {VGA_R, VGA_G, VGA_B} = {8'hff, 8'hff, 8'hff};
-	    else
-	      // Background color
-	      {VGA_R, VGA_G, VGA_B} = {background_r, background_g, background_b};
+   
+   // Pipe initialization and movement
+   always_ff @(posedge clk) begin
+      if (reset) begin
+         // Initialize random counter
+         random_counter <= 16'h1234;
+         
+         // Initialize pipes with positions from C code
+         pipe1_x <= 770;
+         pipe2_x <= 1028;
+         pipe3_x <= 1284;
+         
+         // Initialize random heights
+         pipe1_gap_y <= get_random(16'h1234);
+         pipe2_gap_y <= get_random(16'h5678);
+         pipe3_gap_y <= get_random(16'h9ABC);
+      end else if (VGA_VS && !vsync_reg) begin
+         // Update random seed
+         random_counter <= random_counter + 1;
+         
+         // Move pipes left
+         pipe1_x <= pipe1_x - PIPE_SPEED;
+         pipe2_x <= pipe2_x - PIPE_SPEED;
+         pipe3_x <= pipe3_x - PIPE_SPEED;
+         
+         // Reset pipes when they go off screen
+         if (pipe1_x <= 1) pipe1_x <= 780;
+         if (pipe2_x <= 1) pipe2_x <= 780;
+         if (pipe3_x <= 1) pipe3_x <= 780;
+         
+         // Generate new heights when pipes reach certain position
+         if (pipe1_x == 770) pipe1_gap_y <= get_random(random_counter);
+         if (pipe2_x == 770) pipe2_gap_y <= get_random(random_counter + 16'h1111);
+         if (pipe3_x == 770) pipe3_gap_y <= get_random(random_counter + 16'h2222);
+         
+         // Calculate gap positions for display
+         pipe1_gap_top <= pipe1_gap_y * 5 + 25;
+         pipe1_gap_bottom <= pipe1_gap_y * 5 + 145;
+         
+         pipe2_gap_top <= pipe2_gap_y * 5 + 25;
+         pipe2_gap_bottom <= pipe2_gap_y * 5 + 145;
+         
+         pipe3_gap_top <= pipe3_gap_y * 5 + 25;
+         pipe3_gap_bottom <= pipe3_gap_y * 5 + 145;
       end
    end
-	       
+    
+   // Address calculation
+   always_comb begin
+       bg_addr = vcount * 640 + hcount[10:1];
+
+       if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
+           vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
+           bird_addr = (vcount - bird_y) * BIRD_WIDTH + (hcount[10:1] - BIRD_X);
+       end else begin
+           bird_addr = 0;  // outside bird → address 0 (transparent)
+       end
+   end
+
+   // Bird physics and animation
+   always_ff @(posedge clk) begin
+     vsync_reg <= VGA_VS;
+
+     if (reset) begin
+        bird_y <= 240;
+        bird_velocity <= 0;
+        bird_frame <= 0;
+        animation_counter <= 0;
+     end else if (VGA_VS && !vsync_reg) begin
+        animation_counter <= animation_counter + 1;
+        if (animation_counter == 10) begin
+           animation_counter <= 0;
+           bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
+        end
+        
+        // TEST MODE - Always in game state
+        // Apply flap if flap_latched is set
+        if (flap_latched) begin
+           bird_velocity <= FLAP_STRENGTH;
+        end else begin
+           bird_velocity <= bird_velocity + GRAVITY;
+        end
+
+        // Update bird position
+        bird_y <= bird_y + bird_velocity;
+        
+        // Boundary checks
+        if (bird_y < 0) bird_y <= 0;
+        if (bird_y > 480 - BIRD_HEIGHT) bird_y <= 480 - BIRD_HEIGHT;
+     end
+   end
+
+   // Pipe pixel detection - Using simple assign statements
+   assign pipe1_hit = (hcount[10:1] >= pipe1_x) && (hcount[10:1] < pipe1_x + PIPE_WIDTH) && 
+                      ((vcount < pipe1_gap_top) || (vcount > pipe1_gap_bottom));
+                      
+   assign pipe2_hit = (hcount[10:1] >= pipe2_x) && (hcount[10:1] < pipe2_x + PIPE_WIDTH) && 
+                      ((vcount < pipe2_gap_top) || (vcount > pipe2_gap_bottom));
+                      
+   assign pipe3_hit = (hcount[10:1] >= pipe3_x) && (hcount[10:1] < pipe3_x + PIPE_WIDTH) && 
+                      ((vcount < pipe3_gap_top) || (vcount > pipe3_gap_bottom));
+   
+   // Combined pipe detection
+   assign pipe_pixel = pipe1_hit || pipe2_hit || pipe3_hit;
+
+   // Output color
+   always_comb begin
+      {VGA_R, VGA_G, VGA_B} = 24'h000000;
+      
+      if (VGA_BLANK_n) begin
+         if (pipe_pixel) begin
+            // Pipe pixel - pure green
+            VGA_R = PIPE_COLOR_R;
+            VGA_G = PIPE_COLOR_G;
+            VGA_B = PIPE_COLOR_B;
+         end else if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
+             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
+             bird_color != 8'h00) begin
+             // Bird pixel, apply R3 G3 B2 unpack
+             VGA_R = {bird_color[7:5], 5'b00000};
+             VGA_G = {bird_color[4:2], 5'b00000};
+             VGA_B = {bird_color[1:0], 6'b000000};
+         end else begin
+             // Background pixel, apply B3 G3 R2 unpack
+             VGA_B = {bg_color[7:5], 5'b00000};
+             VGA_G = {bg_color[4:2], 5'b00000};
+             VGA_R = {bg_color[1:0], 6'b000000};
+         end
+      end
+   end
+
+   //====================== AUDIO SUBSYSTEM ======================//
+   // Signals for audio subsystem
+   wire main_clk;
+   wire audio_clk;
+   wire [1:0] sample_end;
+   wire [1:0] sample_req;
+   wire [15:0] audio_output;
+   wire [15:0] audio_sample;
+
+   // Sound samples from audio ROM blocks
+   wire [15:0] M_bell;
+   wire [15:0] M_city;
+   wire [15:0] M_who;
+   wire [15:0] M_sw;
+   wire [15:0] M_bgm;  // Background music data
+
+   // Audio ROM block addresses
+   wire [14:0] addr_bell;
+   wire [14:0] addr_city;
+   wire [15:0] addr_who;
+   wire [14:0] addr_sw;
+   wire [14:0] addr_bgm;  // Background music address
+
+   // Audio control signal - fixed to play background music
+   wire [1:0] audio_ctrl = 2'b00;
+
+   // Store sounds in memory ROM blocks
+   //bell b0 (.clock(clk), .address(addr_bell), .q(M_bell));
+   city c0 (.clock(clk), .address(addr_city), .q(M_city));
+   whoosh_new w0 (.clock(clk), .address(addr_who), .q(M_who));
+   sword s0 (.clock(clk), .address(addr_sw), .q(M_sw));
+   bgm_rom bgm0 (.clock(clk), .address(addr_bgm), .q(M_bgm));  // Background music ROM
+
+   // Generate audio clock
+   clock_pll pll (
+       .refclk (clk),
+       .rst (reset),
+       .outclk_0 (audio_clk),
+       .outclk_1 (main_clk)
+   );
+
+   // Configure registers of audio codec ssm2603
+   i2c_av_config av_config (
+       .clk (main_clk),
+       .reset (reset),
+       .i2c_sclk (AUD_I2C_SCLK),
+       .i2c_sdat (AUD_I2C_SDAT),
+       .status (LED)
+   );
+
+   assign AUD_XCK = audio_clk;
+   assign AUD_MUTE = (SW != 4'b0);
+
+   // Call Audio codec interface
+   audio_codec ac (
+       .clk (audio_clk),
+       .reset (reset),
+       .sample_end (sample_end),
+       .sample_req (sample_req),
+       .audio_output (audio_output),
+       .channel_sel (2'b10),
+
+       .AUD_ADCLRCK (AUD_ADCLRCK),
+       .AUD_ADCDAT (AUD_ADCDAT),
+       .AUD_DACLRCK (AUD_DACLRCK),
+       .AUD_DACDAT (AUD_DACDAT),
+       .AUD_BCLK (AUD_BCLK)
+   );
+
+   // Fetch audio samples from these ROM blocks
+   audio_effects ae (
+       .clk (audio_clk),
+       .sample_end (sample_end[1]),
+       .sample_req (sample_req[1]),
+       .audio_output (audio_output),
+       .audio_sample (audio_sample),
+       .addr_bell(addr_bell),
+       .addr_city(addr_city),
+       .addr_who(addr_who),
+       .addr_sw(addr_sw),
+       .M_bell(M_bell),
+       .M_who(M_who),
+       .M_city(M_city),
+       .M_sw(M_sw),
+       .M_bgm(M_bgm),       // Background music data
+       .addr_bgm(addr_bgm), // Background music address
+       .control(audio_ctrl)
+   );
+   //===================== END AUDIO SUBSYSTEM ==================//
+         
 endmodule
 
 module vga_counters(
