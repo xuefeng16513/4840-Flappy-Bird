@@ -4,15 +4,18 @@
 typedef struct {
     unsigned char red, green, blue;
 } vga_ball_color_t;
+
 typedef struct {
     unsigned short x, y;
     unsigned char radius;
 } vga_ball_position_t;
+
 typedef struct {
     vga_ball_color_t background;
     vga_ball_position_t ball;
     unsigned char flap;  // for passing flap input
 } vga_ball_arg_t;
+
 #define VGA_BALL_MAGIC 'q'
 /* ioctls and their arguments */
 #define VGA_BALL_WRITE_BACKGROUND _IOW(VGA_BALL_MAGIC, 1, vga_ball_arg_t)

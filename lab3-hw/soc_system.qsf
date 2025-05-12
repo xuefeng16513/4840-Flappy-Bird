@@ -863,4 +863,5 @@ set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
 set_global_assignment -name QIP_FILE bird_rom0.qip
 set_global_assignment -name QIP_FILE bird_rom2.qip
 set_global_assignment -name QIP_FILE bird_rom1.qip
+set_global_assignment -name QIP_FILE pipe_rom.qip
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

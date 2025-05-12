@@ -44,6 +44,7 @@
 #define BALL_Y_LOW(x) ((x)+5)
 #define BALL_Y_HIGH(x) ((x)+6)
 #define BALL_RADIUS(x) ((x)+7)
+#define FLAP_SIGNAL(x) ((x)+8)  /* Register 8 for flap signal */
 
 /*
  * Information about our device
@@ -52,7 +53,8 @@ struct vga_ball_dev {
 	struct resource res; /* Resource: our registers */
 	void __iomem *virtbase; /* Where registers can be accessed in memory */
         vga_ball_color_t background;
-		vga_ball_position_t ball;
+	vga_ball_position_t ball;
+	unsigned char flap;
 } dev;
 
 /*
@@ -84,6 +86,24 @@ static void write_ball_position(vga_ball_position_t *ball)
 }
 
 /*
+ * Write the flap signal
+ */
+static void write_flap(unsigned char flap)
+{
+    // Ensure value is either 0 or 1
+    unsigned char value = flap ? 1 : 0;
+    
+    // Write to register 8
+    iowrite8(value, FLAP_SIGNAL(dev.virtbase));
+    
+    // Store in device structure
+    dev.flap = value;
+    
+    // Debug message to kernel log
+    printk(KERN_INFO "vga_ball: Wrote flap value %d to register 8\n", value);
+}
+
+/*
  * Handle ioctl() calls from userspace:
  * Read or write the segments on single digits.
  * Note extensive error checking of arguments
@@ -108,26 +128,26 @@ static long vga_ball_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 		break;
 
 	case VGA_BALL_WRITE_BALL:
-        if (copy_from_user(&vla, (vga_ball_arg_t *) arg,
-                   sizeof(vga_ball_arg_t)))
-            return -EACCES;
-        write_ball_position(&vla.ball);
-        break;
+		if (copy_from_user(&vla, (vga_ball_arg_t *) arg,
+		           sizeof(vga_ball_arg_t)))
+		    return -EACCES;
+		write_ball_position(&vla.ball);
+		break;
 
 	case VGA_BALL_READ_BALL:
-        vla.ball = dev.ball;
-        if (copy_to_user((vga_ball_arg_t *) arg, &vla,
-                 sizeof(vga_ball_arg_t)))
-            return -EACCES;
-        break;
+		vla.ball = dev.ball;
+		if (copy_to_user((vga_ball_arg_t *) arg, &vla,
+		         sizeof(vga_ball_arg_t)))
+		    return -EACCES;
+		break;
 
 	case VGA_BALL_WRITE_FLAP:
-	    if (copy_from_user(&vla, (vga_ball_arg_t *) arg, sizeof(vga_ball_arg_t)))
-		return -EACCES;
-
-	    // Write to register offset 8 (defined implicitly in vga_ball.sv)
-	    iowrite8(vla.flap, dev.virtbase + 8);  // Send flap signal to hardware
-	    break;
+		if (copy_from_user(&vla, (vga_ball_arg_t *) arg, sizeof(vga_ball_arg_t)))
+		    return -EACCES;
+		
+		// Use the helper function for consistency
+		write_flap(vla.flap);
+		break;
 
 	default:
 		return -EINVAL;
@@ -185,7 +205,10 @@ static int __init vga_ball_probe(struct platform_device *pdev)
         
 	/* Set an initial color */
         write_background(&beige);
-		write_ball_position(&initial_ball);
+	write_ball_position(&initial_ball);
+
+	dev.flap = 0;
+    	write_flap(0);
 
 	return 0;
 
