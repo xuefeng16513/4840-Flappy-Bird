@@ -47,13 +47,13 @@ module vga_ball(input logic        clk,
    logic flap_latched;
 
    // Pipe parameters
-   parameter NUM_PIPES = 4;              // Increased number of pipes for better distribution
+   parameter NUM_PIPES = 3;              // Number of pipes on screen at once
    parameter PIPE_WIDTH = 70;            // Width of pipes in pixels
    parameter PIPE_GAP_MIN = 120;         // Minimum gap between top and bottom pipes
    parameter PIPE_GAP_MAX = 200;         // Maximum gap between top and bottom pipes
    parameter PIPE_SPEED = 2;             // Pixels per frame the pipes move left
    parameter PIPE_SPAWN_X = 640;         // X position where pipes spawn
-   parameter PIPE_MIN_DISTANCE = 280;    // Minimum distance between consecutive pipes (increased)
+   parameter PIPE_DISTANCE = 250;        // Distance between consecutive pipes
    parameter PIPE_COLOR_R = 8'h00;       // Pipe color (Red) - pure green pipes
    parameter PIPE_COLOR_G = 8'hC0;       // Pipe color (Green)
    parameter PIPE_COLOR_B = 8'h00;       // Pipe color (Blue)
@@ -137,18 +137,13 @@ module vga_ball(input logic        clk,
          // Initialize random counter with non-zero seed
          random_counter <= 16'h5A5A;
          
-         // Initialize pipes with evenly distributed spacing
+         // Initialize pipes with fixed spacing
          for (int i = 0; i < NUM_PIPES; i++) begin
-            // Distribute pipes evenly across the screen width
-            // This ensures that we have evenly spaced pipes
-            pipe_x[i] <= PIPE_SPAWN_X + (i * PIPE_MIN_DISTANCE * 640 / (NUM_PIPES * PIPE_MIN_DISTANCE));
-            
+            pipe_x[i] <= PIPE_SPAWN_X + i * PIPE_DISTANCE;
             // Ensure gap heights are always between MIN and MAX
             pipe_gap_height[i] <= get_random(16'h1234 + i*16'h5678, PIPE_GAP_MIN, PIPE_GAP_MAX);
-            
             // Ensure gap positions are reasonable (not too close to top/bottom)
             pipe_gap_y[i] <= get_random(16'h9ABC + i*16'h3456, 10'd120, 10'd360);
-            
             pipe_active[i] <= 1;
          end
       end else if (VGA_VS && !vsync_reg) begin
@@ -163,15 +158,7 @@ module vga_ball(input logic        clk,
                
                // If pipe moves off screen, reset it
                if (pipe_x[i] <= 0) begin
-                  // Find the rightmost pipe's position
-                  logic [9:0] rightmost_x = 0;
-                  for (int j = 0; j < NUM_PIPES; j++) begin
-                     if (pipe_x[j] > rightmost_x) rightmost_x = pipe_x[j];
-                  end
-                  
-                  // Place this pipe to the right of the rightmost pipe with minimum distance
-                  pipe_x[i] <= rightmost_x + PIPE_MIN_DISTANCE + 
-                               get_random(random_counter + i, 10'd0, 10'd30); // Add some variation
+                  pipe_x[i] <= PIPE_SPAWN_X;
                   
                   // Generate guaranteed valid gap height
                   pipe_gap_height[i] <= get_random(random_counter + i*16'h1234, PIPE_GAP_MIN, PIPE_GAP_MAX);
