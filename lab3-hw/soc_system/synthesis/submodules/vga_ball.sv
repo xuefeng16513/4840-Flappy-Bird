@@ -17,6 +17,13 @@
  *        8    |  FLAP  |  Bird flap trigger (bit 0)
  */
 
+// 在模块外部定义游戏状态
+typedef enum logic [1:0] {
+   GAME_START    = 2'b00,
+   GAME_PLAYING  = 2'b01,
+   GAME_OVER     = 2'b10
+} game_state_t;
+
 module vga_ball(input logic        clk,
                 input logic        reset,
                 input logic [7:0]  writedata,
@@ -29,13 +36,6 @@ module vga_ball(input logic        clk,
                                    VGA_BLANK_n,
                 output logic       VGA_SYNC_n);
 
-   // 游戏状态定义
-   typedef enum logic [1:0] {
-      GAME_START,    // 显示开始画面
-      GAME_PLAYING,  // 游戏进行中
-      GAME_OVER      // 游戏结束
-   } game_state_t;
-
    logic [10:0]    hcount;
    logic [9:0]     vcount;
 
@@ -45,7 +45,7 @@ module vga_ball(input logic        clk,
    logic [7:0] animation_counter;
    logic vsync_reg;
    
-   // 新增游戏状态变量
+   // 游戏状态变量
    game_state_t game_state;
    logic [18:0] start_screen_addr;
    logic [7:0] start_screen_color;
@@ -56,6 +56,7 @@ module vga_ball(input logic        clk,
    logic [11:0] bird_addr;
    logic [7:0] bird_color;
    logic flap_latched;
+   logic flap_input;  // 新增：表示从寄存器接收到的flap输入
 
    parameter BIRD_X = 100;
    parameter BIRD_WIDTH = 34;
@@ -89,40 +90,73 @@ module vga_ball(input logic        clk,
         default: bird_color = bird_color0;
      endcase
    end
+   
+   // 处理寄存器写入，捕获flap输入
+   always_ff @(posedge clk) begin
+     if (reset) begin
+        flap_input <= 0;
+     end else if (chipselect && write && address == 4'd8) begin
+        flap_input <= writedata[0];
+     end
+   end
     
-   // === TEST MODE - Auto flap timer ===
+   // 集中处理flap_latched信号
    always_ff @(posedge clk) begin
      if (reset) begin
         test_counter <= 0;
         flap_latched <= 0;
-        game_state <= GAME_START; // 在测试模式下从开始画面开始
      end else begin
-        // Auto-flap timer - triggers flap every TEST_INTERVAL cycles
+        // 从寄存器捕获flap输入
+        if (flap_input) begin
+           flap_latched <= 1;
+           flap_input <= 0;  // 消费掉输入
+        end
+        
+        // TEST MODE: Auto-flap timer
         test_counter <= test_counter + 1;
         if (test_counter >= TEST_INTERVAL) begin
            test_counter <= 0;
            flap_latched <= 1;
-        end else if (VGA_VS && !vsync_reg) begin
-           // 游戏逻辑会在vsync时处理flap_latched
+        end
+        
+        // 在状态变化时重置flap
+        if (VGA_VS && !vsync_reg) begin
+           // 在vsync时根据游戏状态处理flap输入
+           if (flap_latched) begin
+              case (game_state)
+                 GAME_START: begin
+                    // 开始游戏
+                    flap_latched <= 0;
+                 end
+                 GAME_PLAYING: begin
+                    // 已经应用了跳跃
+                    flap_latched <= 0;
+                 end
+                 GAME_OVER: begin
+                    // 重新开始游戏
+                    flap_latched <= 0;
+                 end
+              endcase
+           end
         end
      end
    end
     
    // Address calculation
    always_comb begin
-       // 始终计算所有地址，但在输出时根据游戏状态选择
-       bg_addr = vcount * 640 + hcount[10:1];
-       start_screen_addr = vcount * 640 + hcount[10:1];
+      // 始终计算所有地址，但在输出时根据游戏状态选择
+      bg_addr = vcount * 640 + hcount[10:1];
+      start_screen_addr = vcount * 640 + hcount[10:1];
 
-       if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
-           vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
-           bird_addr = (vcount - bird_y) * BIRD_WIDTH + (hcount[10:1] - BIRD_X);
-       end else begin
-           bird_addr = 0;  // outside bird → address 0 (transparent)
-       end
+      if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
+          vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT) begin
+          bird_addr = (vcount - bird_y) * BIRD_WIDTH + (hcount[10:1] - BIRD_X);
+      end else begin
+          bird_addr = 0;  // outside bird → address 0 (transparent)
+      end
    end
 
-   // Bird physics and animation
+   // Bird physics and animation - 不修改flap_latched
    always_ff @(posedge clk) begin
      vsync_reg <= VGA_VS;
 
@@ -139,7 +173,6 @@ module vga_ball(input logic        clk,
               // 检测flap输入以开始游戏
               if (flap_latched) begin
                  game_state <= GAME_PLAYING;
-                 flap_latched <= 0;
               end
            end
            
@@ -154,7 +187,6 @@ module vga_ball(input logic        clk,
               // 处理鸟的跳跃
               if (flap_latched) begin
                  bird_velocity <= FLAP_STRENGTH;
-                 flap_latched <= 0;
               end else begin
                  bird_velocity <= bird_velocity + GRAVITY;
               end
@@ -176,7 +208,6 @@ module vga_ball(input logic        clk,
                  game_state <= GAME_START;
                  bird_y <= 240;
                  bird_velocity <= 0;
-                 flap_latched <= 0;
               end
            end
         endcase
