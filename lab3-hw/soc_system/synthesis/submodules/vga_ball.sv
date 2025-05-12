@@ -46,46 +46,12 @@ module vga_ball(input logic        clk,
    logic [7:0] bird_color;
    logic flap_latched;
 
-   // Pipe parameters
-   parameter PIPE_WIDTH = 70;            // Width of pipes in pixels
-   parameter PIPE_SPEED = 2;             // Pixels per frame the pipes move left
-   parameter PIPE_COLOR_R = 8'h00;       // Pipe color (Red) - pure green pipes
-   parameter PIPE_COLOR_G = 8'hC0;       // Pipe color (Green)
-   parameter PIPE_COLOR_B = 8'h00;       // Pipe color (Blue)
-   
-   // Pipe state variables - using C file positions
-   // pipe 1
-   logic [9:0] pipe1_x;                  // X position of pipe 1
-   logic [5:0] pipe1_gap_y;              // Height parameter for pipe 1
-   logic [9:0] pipe1_gap_top;            // Top of gap for pipe 1
-   logic [9:0] pipe1_gap_bottom;         // Bottom of gap for pipe 1
-   
-   // pipe 2
-   logic [9:0] pipe2_x;                  // X position of pipe 2
-   logic [5:0] pipe2_gap_y;              // Height parameter for pipe 2
-   logic [9:0] pipe2_gap_top;            // Top of gap for pipe 2
-   logic [9:0] pipe2_gap_bottom;         // Bottom of gap for pipe 2
-   
-   // pipe 3
-   logic [9:0] pipe3_x;                  // X position of pipe 3
-   logic [5:0] pipe3_gap_y;              // Height parameter for pipe 3
-   logic [9:0] pipe3_gap_top;            // Top of gap for pipe 3
-   logic [9:0] pipe3_gap_bottom;         // Bottom of gap for pipe 3
-   
-   // Random number generation
-   logic [15:0] random_counter;
-   
-   // Pixel detection
-   logic pipe_pixel;
-   logic pipe1_hit, pipe2_hit, pipe3_hit;
-   
    parameter BIRD_X = 100;
    parameter BIRD_WIDTH = 34;
    parameter BIRD_HEIGHT = 24;
     
    parameter GRAVITY = 1;
    parameter FLAP_STRENGTH = -16;
-   parameter PIPE_GAP_HEIGHT = 120;  // Gap size
     
    // TEST MODE ADDITIONS
    logic [31:0] test_counter;
@@ -109,14 +75,6 @@ module vga_ball(input logic        clk,
         default: bird_color = bird_color0;
      endcase
    end
-   
-   // Function to get a random number between min and max
-   function [5:0] get_random;
-      input [15:0] seed;
-      begin
-         get_random = (seed ^ (seed >> 5) ^ (seed >> 9) ^ 16'h1234) % 41 + 5; // 5-45
-      end
-   endfunction
     
    // === TEST MODE - Auto flap timer ===
    always_ff @(posedge clk) begin
@@ -134,52 +92,6 @@ module vga_ball(input logic        clk,
            flap_latched <= 0; // Reset flap after consumed during vsync
         end
      end
-   end
-   
-   // Pipe initialization and movement
-   always_ff @(posedge clk) begin
-      if (reset) begin
-         // Initialize random counter
-         random_counter <= 16'h1234;
-         
-         // Initialize pipes with positions from C code
-         pipe1_x <= 770;
-         pipe2_x <= 1028;
-         pipe3_x <= 1284;
-         
-         // Initialize random heights
-         pipe1_gap_y <= get_random(16'h1234);
-         pipe2_gap_y <= get_random(16'h5678);
-         pipe3_gap_y <= get_random(16'h9ABC);
-      end else if (VGA_VS && !vsync_reg) begin
-         // Update random seed
-         random_counter <= random_counter + 1;
-         
-         // Move pipes left
-         pipe1_x <= pipe1_x - PIPE_SPEED;
-         pipe2_x <= pipe2_x - PIPE_SPEED;
-         pipe3_x <= pipe3_x - PIPE_SPEED;
-         
-         // Reset pipes when they go off screen
-         if (pipe1_x <= 1) pipe1_x <= 780;
-         if (pipe2_x <= 1) pipe2_x <= 780;
-         if (pipe3_x <= 1) pipe3_x <= 780;
-         
-         // Generate new heights when pipes reach certain position
-         if (pipe1_x == 770) pipe1_gap_y <= get_random(random_counter);
-         if (pipe2_x == 770) pipe2_gap_y <= get_random(random_counter + 16'h1111);
-         if (pipe3_x == 770) pipe3_gap_y <= get_random(random_counter + 16'h2222);
-         
-         // Calculate gap positions for display
-         pipe1_gap_top <= pipe1_gap_y * 5 + 25;
-         pipe1_gap_bottom <= pipe1_gap_y * 5 + 145;
-         
-         pipe2_gap_top <= pipe2_gap_y * 5 + 25;
-         pipe2_gap_bottom <= pipe2_gap_y * 5 + 145;
-         
-         pipe3_gap_top <= pipe3_gap_y * 5 + 25;
-         pipe3_gap_bottom <= pipe3_gap_y * 5 + 145;
-      end
    end
     
    // Address calculation
@@ -227,30 +139,11 @@ module vga_ball(input logic        clk,
      end
    end
 
-   // Pipe pixel detection - Using simple assign statements
-   assign pipe1_hit = (hcount[10:1] >= pipe1_x) && (hcount[10:1] < pipe1_x + PIPE_WIDTH) && 
-                      ((vcount < pipe1_gap_top) || (vcount > pipe1_gap_bottom));
-                      
-   assign pipe2_hit = (hcount[10:1] >= pipe2_x) && (hcount[10:1] < pipe2_x + PIPE_WIDTH) && 
-                      ((vcount < pipe2_gap_top) || (vcount > pipe2_gap_bottom));
-                      
-   assign pipe3_hit = (hcount[10:1] >= pipe3_x) && (hcount[10:1] < pipe3_x + PIPE_WIDTH) && 
-                      ((vcount < pipe3_gap_top) || (vcount > pipe3_gap_bottom));
-   
-   // Combined pipe detection
-   assign pipe_pixel = pipe1_hit || pipe2_hit || pipe3_hit;
-
    // Output color
    always_comb begin
       {VGA_R, VGA_G, VGA_B} = 24'h000000;
-      
       if (VGA_BLANK_n) begin
-         if (pipe_pixel) begin
-            // Pipe pixel - pure green
-            VGA_R = PIPE_COLOR_R;
-            VGA_G = PIPE_COLOR_G;
-            VGA_B = PIPE_COLOR_B;
-         end else if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
+         if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
              vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT &&
              bird_color != 8'h00) begin
              // Bird pixel, apply R3 G3 B2 unpack
