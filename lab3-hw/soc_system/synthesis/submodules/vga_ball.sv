@@ -61,12 +61,19 @@ module vga_ball(input logic        clk,
    logic [5:0] pipe_gap_y[NUM_PIPES];    // Random height parameter for each pipe
    logic pipe_active[NUM_PIPES];         // Whether each pipe is currently active
    
+   // Pre-calculated gap centers and ranges for each pipe
+   logic [9:0] gap_center_0, gap_center_1, gap_center_2;
+   logic [9:0] gap_top_0, gap_bottom_0;
+   logic [9:0] gap_top_1, gap_bottom_1;
+   logic [9:0] gap_top_2, gap_bottom_2;
+   
    // Random number generation for gap heights
    logic [15:0] random_counter;
    logic pipe_pixel;  // Indicates if current pixel is part of a pipe
    
-   // For gap center calculation in always_comb
-   logic [9:0] gap_center;
+   // Pixel position test signals for individual pipes
+   logic pipe0_h_match, pipe1_h_match, pipe2_h_match;
+   logic pipe0_v_match, pipe1_v_match, pipe2_v_match;
    
    parameter BIRD_X = 100;
    parameter BIRD_WIDTH = 34;
@@ -106,6 +113,22 @@ module vga_ball(input logic        clk,
          get_random = (seed ^ (seed >> 7) ^ (seed >> 13)) & 6'h3F;
       end
    endfunction
+   
+   // Pre-calculate gap boundaries in sequential logic
+   always_ff @(posedge clk) begin
+     // Calculate gap centers and boundaries for pipes
+     gap_center_0 <= pipe_gap_y[0] * 5 + 85;
+     gap_top_0 <= (pipe_gap_y[0] * 5 + 85) - PIPE_GAP_HEIGHT/2;
+     gap_bottom_0 <= (pipe_gap_y[0] * 5 + 85) + PIPE_GAP_HEIGHT/2;
+     
+     gap_center_1 <= pipe_gap_y[1] * 5 + 85;
+     gap_top_1 <= (pipe_gap_y[1] * 5 + 85) - PIPE_GAP_HEIGHT/2;
+     gap_bottom_1 <= (pipe_gap_y[1] * 5 + 85) + PIPE_GAP_HEIGHT/2;
+     
+     gap_center_2 <= pipe_gap_y[2] * 5 + 85;
+     gap_top_2 <= (pipe_gap_y[2] * 5 + 85) - PIPE_GAP_HEIGHT/2;
+     gap_bottom_2 <= (pipe_gap_y[2] * 5 + 85) + PIPE_GAP_HEIGHT/2;
+   end
     
    // === TEST MODE - Auto flap timer ===
    always_ff @(posedge clk) begin
@@ -211,54 +234,20 @@ module vga_ball(input logic        clk,
      end
    end
 
-   // Check if current pixel is inside a pipe
-   always_comb begin
-      // Initialize pipe_pixel
-      pipe_pixel = 0;
-      
-      // Manually unroll the loop for each pipe
-      // Pipe 0
-      if (pipe_active[0]) begin
-         gap_center = pipe_gap_y[0] * 5 + 85; // Center of the gap
-         
-         // Check if within pipe's horizontal bounds
-         if (hcount[10:1] >= pipe_x[0] && hcount[10:1] < pipe_x[0] + PIPE_WIDTH) begin
-               // Check if NOT within the gap
-               if (vcount < gap_center - PIPE_GAP_HEIGHT/2 || 
-                  vcount > gap_center + PIPE_GAP_HEIGHT/2) begin
-                  pipe_pixel = 1;
-               end
-         end
-      end
-      
-      // Pipe 1
-      if (pipe_active[1]) begin
-         gap_center = pipe_gap_y[1] * 5 + 85; // Center of the gap
-         
-         // Check if within pipe's horizontal bounds
-         if (hcount[10:1] >= pipe_x[1] && hcount[10:1] < pipe_x[1] + PIPE_WIDTH) begin
-               // Check if NOT within the gap
-               if (vcount < gap_center - PIPE_GAP_HEIGHT/2 || 
-                  vcount > gap_center + PIPE_GAP_HEIGHT/2) begin
-                  pipe_pixel = 1;
-               end
-         end
-      end
-      
-      // Pipe 2
-      if (pipe_active[2]) begin
-         gap_center = pipe_gap_y[2] * 5 + 85; // Center of the gap
-         
-         // Check if within pipe's horizontal bounds
-         if (hcount[10:1] >= pipe_x[2] && hcount[10:1] < pipe_x[2] + PIPE_WIDTH) begin
-               // Check if NOT within the gap
-               if (vcount < gap_center - PIPE_GAP_HEIGHT/2 || 
-                  vcount > gap_center + PIPE_GAP_HEIGHT/2) begin
-                  pipe_pixel = 1;
-               end
-         end
-      end
-   end
+   // Simple horizontal position match logic
+   assign pipe0_h_match = (hcount[10:1] >= pipe_x[0] && hcount[10:1] < pipe_x[0] + PIPE_WIDTH) && pipe_active[0];
+   assign pipe1_h_match = (hcount[10:1] >= pipe_x[1] && hcount[10:1] < pipe_x[1] + PIPE_WIDTH) && pipe_active[1];
+   assign pipe2_h_match = (hcount[10:1] >= pipe_x[2] && hcount[10:1] < pipe_x[2] + PIPE_WIDTH) && pipe_active[2];
+   
+   // Vertical position match logic (outside the gap)
+   assign pipe0_v_match = (vcount < gap_top_0 || vcount > gap_bottom_0);
+   assign pipe1_v_match = (vcount < gap_top_1 || vcount > gap_bottom_1);
+   assign pipe2_v_match = (vcount < gap_top_2 || vcount > gap_bottom_2);
+   
+   // Final pipe pixel detection
+   assign pipe_pixel = (pipe0_h_match && pipe0_v_match) || 
+                       (pipe1_h_match && pipe1_v_match) || 
+                       (pipe2_h_match && pipe2_v_match);
 
    // Output color
    always_comb begin
