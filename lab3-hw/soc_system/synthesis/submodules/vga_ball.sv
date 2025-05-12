@@ -216,20 +216,46 @@ module vga_ball(input logic        clk,
       // Initialize pipe_pixel
       pipe_pixel = 0;
       
-      // Check for each pipe
-      for (int i = 0; i < NUM_PIPES; i++) begin
-         if (pipe_active[i]) begin
-            // Calculate gap center based on the gap_y parameter
-            gap_center = pipe_gap_y[i] * 5 + 85; // Center of the gap
-            
-            // Check if within pipe's horizontal bounds
-            if (hcount[10:1] >= pipe_x[i] && hcount[10:1] < pipe_x[i] + PIPE_WIDTH) begin
-               // Check if NOT within the gap (pipe_gap_y[i]*5+25 to pipe_gap_y[i]*5+145)
+      // Manually unroll the loop for each pipe
+      // Pipe 0
+      if (pipe_active[0]) begin
+         gap_center = pipe_gap_y[0] * 5 + 85; // Center of the gap
+         
+         // Check if within pipe's horizontal bounds
+         if (hcount[10:1] >= pipe_x[0] && hcount[10:1] < pipe_x[0] + PIPE_WIDTH) begin
+               // Check if NOT within the gap
                if (vcount < gap_center - PIPE_GAP_HEIGHT/2 || 
-                   vcount > gap_center + PIPE_GAP_HEIGHT/2) begin
+                  vcount > gap_center + PIPE_GAP_HEIGHT/2) begin
                   pipe_pixel = 1;
                end
-            end
+         end
+      end
+      
+      // Pipe 1
+      if (pipe_active[1]) begin
+         gap_center = pipe_gap_y[1] * 5 + 85; // Center of the gap
+         
+         // Check if within pipe's horizontal bounds
+         if (hcount[10:1] >= pipe_x[1] && hcount[10:1] < pipe_x[1] + PIPE_WIDTH) begin
+               // Check if NOT within the gap
+               if (vcount < gap_center - PIPE_GAP_HEIGHT/2 || 
+                  vcount > gap_center + PIPE_GAP_HEIGHT/2) begin
+                  pipe_pixel = 1;
+               end
+         end
+      end
+      
+      // Pipe 2
+      if (pipe_active[2]) begin
+         gap_center = pipe_gap_y[2] * 5 + 85; // Center of the gap
+         
+         // Check if within pipe's horizontal bounds
+         if (hcount[10:1] >= pipe_x[2] && hcount[10:1] < pipe_x[2] + PIPE_WIDTH) begin
+               // Check if NOT within the gap
+               if (vcount < gap_center - PIPE_GAP_HEIGHT/2 || 
+                  vcount > gap_center + PIPE_GAP_HEIGHT/2) begin
+                  pipe_pixel = 1;
+               end
          end
       end
    end
