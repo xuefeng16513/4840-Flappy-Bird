@@ -5,3 +5,9 @@ state.ST_IDLE 0 0 0 0
 state.ST_COMP_TRANS 1 0 0 1 
 state.ST_UNCOMP_TRANS 1 0 1 0 
 state.ST_UNCOMP_WR_SUBBURST 1 1 0 0 
+
+State Machine - |soc_system_top|soc_system:soc_system0|vga_ball:vga_ball_0|game_state
+Name game_state.WAITING game_state.GAME_OVER game_state.PLAYING 
+game_state.WAITING 0 0 0 
+game_state.PLAYING 1 0 1 
+game_state.GAME_OVER 1 1 0 
