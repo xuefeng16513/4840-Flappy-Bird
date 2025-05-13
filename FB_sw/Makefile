@@ -1,33 +1,13 @@
-ifneq (${KERNELRELEASE},)
+CC = arm-linux-gnueabihf-gcc
+CFLAGS = -Wall -O2
 
-# KERNELRELEASE defined: we are being compiled as part of the Kernel
-        obj-m := vga_ball.o
+TARGET = flappy_bird
+OBJS = flappy_bird.c
 
-else
+all: $(TARGET)
 
-# We are being compiled as a module: use the Kernel build system
-
-	KERNEL_SOURCE := /usr/src/linux-headers-$(shell uname -r)
-        PWD := $(shell pwd)
-
-default: module hello
-
-module:
-	${MAKE} -C ${KERNEL_SOURCE} SUBDIRS=${PWD} modules
-
-hello: hello.c usbkeyboard.c
-	$(CC) hello.c usbkeyboard.c -lusb-1.0 -o hello
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^
 
 clean:
-	${MAKE} -C ${KERNEL_SOURCE} SUBDIRS=${PWD} clean
-	${RM} hello
-
-TARFILES = Makefile README vga_ball.h vga_ball.c hello.c
-TARFILE = lab3-sw.tar.gz
-.PHONY : tar
-tar : $(TARFILE)
-
-$(TARFILE) : $(TARFILES)
-	tar zcfC $(TARFILE) .. $(TARFILES:%=lab3-sw/%)
-
-endif 
+	rm -f $(TARGET)
