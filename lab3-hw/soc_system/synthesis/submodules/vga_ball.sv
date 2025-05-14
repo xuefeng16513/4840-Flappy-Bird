@@ -25,7 +25,7 @@ module vga_ball(
     logic [9:0] bird_y;
     logic [9:0] new_y;
     logic [1:0] bird_frame;
-    logic [7:0] animation_counter;
+    logic [23:0] animation_counter;
 
     logic [18:0] bg_addr;
     logic [7:0]  bg_color;
@@ -38,9 +38,19 @@ module vga_ball(
 
     logic [7:0] bird_color_reg;
     logic collision;
+	 logic game_over;
     
     logic [15:0] score;
     game_state_t game_state;
+	 
+    // gameover parameters
+    parameter GAMEOVER_WIDTH = 192;
+    parameter GAMEOVER_HEIGHT = 42;
+    parameter GAMEOVER_X = 320 - GAMEOVER_WIDTH/2;
+    parameter GAMEOVER_Y = 240 - GAMEOVER_HEIGHT/2;
+    
+    logic [15:0] gameover_addr;
+    logic [7:0]  gameover_color;
 
     // === Score Display Start ===
     localparam DIGIT_WIDTH  = 16;
@@ -50,7 +60,7 @@ module vga_ball(
     localparam SCORE_Y0     = 10;
     localparam SCORE_X1     = SCORE_X0 + DIGIT_WIDTH + 4;
     localparam SCORE_Y1     = SCORE_Y0;
-
+	 
     // BCD digits
     logic [3:0] digit0, digit1;
     // seven-segment decode signals {A,B,C,D,E,F,G}
@@ -63,7 +73,7 @@ module vga_ball(
     parameter BIRD_HEIGHT = 24;
     
     parameter GRAVITY = 1;
-    parameter FLAP_STRENGTH = -16;
+    parameter FLAP_STRENGTH = -7;
     parameter TEST_INTERVAL = 50_000_000;
     
     logic signed [9:0] bird_velocity;
@@ -81,11 +91,14 @@ module vga_ball(
         .VGA_BLANK_n(VGA_BLANK_n),
         .VGA_SYNC_n(VGA_SYNC_n)
     );
-
-    bg_rom    bg_rom_inst (.address(bg_addr), .clock(clk), .data(8'b0), .wren(1'b0), .q(bg_color));
+	 
+    bg_rom    bg_rom_inst (.address(bg_addr), .clock(clk), .q(bg_color));
     bird_rom0 bird0       (.address(bird_addr), .clock(clk), .q(bird_color0));
     bird_rom1 bird1       (.address(bird_addr), .clock(clk), .q(bird_color1));
     bird_rom2 bird2       (.address(bird_addr), .clock(clk), .q(bird_color2));
+	 
+	 gameover_rom gameover_inst (.address(gameover_addr), .clock(clk), .q(gameover_color));
+	 
 
     logic [7:0] bird_color0, bird_color1, bird_color2;
     
@@ -110,24 +123,33 @@ module vga_ball(
 
     always_comb begin
         logic [9:0] bg_col;
+		  bg_col = (hcount[10:1] + scroll_offset) % 640;
+		  bg_addr = vcount * 640 + bg_col;
+		  /*
         bg_col = (hcount[10:1] + scroll_offset);
         if(bg_col < 640)
             bg_addr = vcount * 640 + bg_col;
         else
             bg_addr = vcount * 640 + (bg_col - 640);
+			*/
 
         if (hcount[10:1] >= BIRD_X && hcount[10:1] < BIRD_X + BIRD_WIDTH &&
             vcount >= bird_y && vcount < bird_y + BIRD_HEIGHT)
             bird_addr = (vcount - bird_y) * BIRD_WIDTH + (hcount[10:1] - BIRD_X);
         else
             bird_addr = 0;
+		
+		  if (in_rect(GAMEOVER_X, GAMEOVER_Y, GAMEOVER_WIDTH, GAMEOVER_HEIGHT, hcount[10:1], vcount))
+            gameover_addr = (vcount - GAMEOVER_Y) * GAMEOVER_WIDTH + (hcount[10:1] - GAMEOVER_X);
+        else
+            gameover_addr = 0;
     end
 
     //管道结构参数（周日晚调试，左侧柱子左边触边缘 就立刻消失）
     parameter PIPE_WIDTH = 52;
-    parameter GAP_HEIGHT = 90;      
-    parameter PIPE_COUNT = 5;
-    parameter PIPE_SPACING = 127; //前一条柱子最左边到前一条柱子最右边，实际间隔127-52 = 75
+    parameter GAP_HEIGHT = 100;      
+    parameter PIPE_COUNT = 3;
+    parameter PIPE_SPACING = 213; //前一条柱子最左边到前一条柱子最右边，实际间隔127-52 = 75
 
     typedef struct packed {
         logic [9:0] x; 
@@ -165,7 +187,7 @@ module vga_ball(
             scroll_counter <= 0;
             score <= 16'd0;
             game_state <= WAITING;
-
+				
             for (i = 0; i < PIPE_COUNT; i = i + 1) begin
                 pipes[i].x <= 640 + i * PIPE_SPACING;
                 pipes[i].gap_y <= 150 + i * 40;
@@ -184,21 +206,28 @@ module vga_ball(
             end
             
             // Animation counter for bird wings always updates
-            animation_counter <= animation_counter + 1;
-            if (animation_counter == 8'd150) begin
-                animation_counter <= 0;
-                bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
-            end
+				if (game_state != GAME_OVER) begin
+					animation_counter <= animation_counter + 1;
+					if (animation_counter == 24'd5_000_000) begin
+						 animation_counter <= 0;
+						 bird_frame <= (bird_frame == 2) ? 0 : bird_frame + 1;
+					end
+				end
             
             // Background always scrolls
-            scroll_counter <= scroll_counter + 1;
-            if (scroll_counter == 24'd500_000) begin
-                scroll_offset <= scroll_offset + 1;
-                if (scroll_offset >= 640) begin
-                    scroll_offset <= 0;
-                end
-                scroll_counter <= 0;
-            end
+				if (game_state != GAME_OVER) begin
+					scroll_counter <= scroll_counter + 1;
+					if (scroll_counter == 24'd500_000) begin
+						scroll_offset <= (scroll_offset + 1) % 640;
+						/*
+						 scroll_offset <= scroll_offset + 1;
+						 if (scroll_offset >= 640) begin
+							  scroll_offset <= 0;
+						 end
+						 */
+						 scroll_counter <= 0;
+					end
+				end
             
             // Game state specific logic
             case (game_state)
@@ -212,7 +241,7 @@ module vga_ball(
                     
                     // Reset pipes (initialize offscreen)
                     for (i = 0; i < PIPE_COUNT; i = i + 1) begin
-                        pipes[i].x <= 640 + i * PIPE_SPACING;
+                        pipes[i].x <= 440 + i * PIPE_SPACING;
                         pipes[i].gap_y <= 150 + i * 20;
                     end
                     
@@ -226,9 +255,10 @@ module vga_ball(
                 PLAYING: begin
                     // Bird physics - update on vsync
                     if (VGA_VS && !vsync_reg) begin
+								
                         // Flap or apply gravity
-                        if (flap_latched) begin
-                            bird_velocity <= FLAP_STRENGTH; // Upward velocity
+                        if (flap_latched) begin 
+									bird_velocity <= FLAP_STRENGTH; // Upward velocity
                         end else begin
                             bird_velocity <= bird_velocity + GRAVITY;
                         end
@@ -239,7 +269,6 @@ module vga_ball(
                         // Boundary checks
                         if (new_y < 0) begin
                             bird_y <= 0;
-                            bird_velocity <= 0;
                         end else if (new_y >= 440 - BIRD_HEIGHT) begin
                             bird_y <= 440 - BIRD_HEIGHT;
                             bird_velocity <= 0;
@@ -256,14 +285,17 @@ module vga_ball(
                         
                         // Update score when passing pipes
                         for (i = 0; i < PIPE_COUNT; i = i + 1) begin
-                            if (pipes[i].x + PIPE_WIDTH == BIRD_X) begin
-                                score <= score + 1;
-                            end
+                            //if (pipes[i].x + PIPE_WIDTH == BIRD_X) begin
+                                //score <= score + 1;
+                            //end
+									 if (pipes[i].x + PIPE_WIDTH < BIRD_X && pipes[i].x + PIPE_WIDTH >= BIRD_X - 2) begin
+										  score <= score + 1;
+									 end
                         end
                         
                         // Move pipes and recycle them
                         for (i = 0; i < PIPE_COUNT; i = i + 1) begin
-                            pipes[i].x <= pipes[i].x - 3; // Faster pipe movement
+                            pipes[i].x <= pipes[i].x - 2; // Faster pipe movement
                             
                             if (pipes[i].x <= 1) begin
                                 pipes[i].x <= max_pipe_x + PIPE_SPACING;
@@ -285,10 +317,13 @@ module vga_ball(
                 GAME_OVER: begin
                     // Game over - bird stops, pipes stop
                     bird_velocity <= 0;
+						  
+						  bird_y <= bird_y;
                     
                     // Wait for flap to restart
                     if (flap_latched) begin
                         game_state <= WAITING;
+								flap_latched <= 0;
                     end
                 end
             endcase
@@ -434,8 +469,8 @@ module vga_ball(
         // Only check collisions in PLAYING state
         if (game_state == PLAYING) begin
             // Upper boundary collision
-            if (bird_y < 0)
-                collision = 1;
+            //if (bird_y < 0)
+            //    collision = 1;
                 
             // Ground collision
             if (bird_y + BIRD_HEIGHT > 440)
@@ -448,7 +483,7 @@ module vga_ball(
                     BIRD_X < pipes[j].x + PIPE_WIDTH) begin
                     
                     // Check Y overlap (not in gap)
-                    if (bird_y < pipes[j].gap_y ||
+                    if ((bird_y < pipes[j].gap_y && bird_y + BIRD_HEIGHT > 0) ||
                         bird_y + BIRD_HEIGHT > pipes[j].gap_y + GAP_HEIGHT)
                         collision = 1;
                 end
@@ -462,7 +497,13 @@ module vga_ball(
 
         if (VGA_BLANK_n) begin
             // Render score (highest priority)
-            if (score_pixel) begin
+				if (game_state == GAME_OVER && in_rect(GAMEOVER_X, GAMEOVER_Y, GAMEOVER_WIDTH, GAMEOVER_HEIGHT, hcount[10:1], vcount) && 
+                gameover_color != 8'h00) begin
+                VGA_R = {gameover_color[7:5], 5'b00000};
+                VGA_G = {gameover_color[4:2], 5'b00000};
+                VGA_B = {gameover_color[1:0], 6'b000000};
+				//rendering score
+            end else if (score_pixel) begin
                 VGA_R = 8'hFF;
                 VGA_G = 8'hFF;
                 VGA_B = 8'hFF;
@@ -494,10 +535,12 @@ module vga_ball(
                 VGA_R = {bg_color[1:0], 6'b000000};
             end
             
+				/*
             // Add a red tint in GAME_OVER state
             if (game_state == GAME_OVER) begin
                 VGA_R = VGA_R | 8'h40; // Add some red tint
             end
+				*/
         end
     end
 endmodule
