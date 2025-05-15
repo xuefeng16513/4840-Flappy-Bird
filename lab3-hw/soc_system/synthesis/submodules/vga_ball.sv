@@ -19,13 +19,13 @@ module vga_ball(
         GAME_OVER  // Bird has hit something
     } game_state_t;
 
-    logic [10:0] hcount; // Horizontal pixel counter (0–1023)
-    logic [9:0]  vcount; // Vertical pixel counter (0–511)
+    logic [10:0] hcount;
+    logic [9:0]  vcount;
 
-    logic [9:0] bird_y;  // Current vertical position of the bird
-    logic [9:0] new_y;  // Updated vertical position after movement
-    logic [1:0] bird_frame;  // Animation frame index for bird sprite
-    logic [23:0] animation_counter;  // Counter for controlling animation speed
+    logic [9:0] bird_y;
+    logic [9:0] new_y;
+    logic [1:0] bird_frame;
+    logic [23:0] animation_counter;
 
     logic [18:0] bg_addr;
     logic [7:0]  bg_color;
@@ -33,8 +33,8 @@ module vga_ball(
     logic [11:0] bird_addr;
     logic [7:0]  bird_color;
 
-    logic [9:0] scroll_offset;  // Horizontal scrolling offset for background
-    logic [23:0] scroll_counter;  // Counter to control scrolling speed
+    logic [9:0] scroll_offset;
+    logic [23:0] scroll_counter;
 
     logic [7:0] bird_color_reg;
     logic collision;
@@ -43,7 +43,7 @@ module vga_ball(
     logic [15:0] score;
     game_state_t game_state;
 	 
-    // Gameover parameters
+    // gameover parameters
     parameter GAMEOVER_WIDTH = 192;
     parameter GAMEOVER_HEIGHT = 42;
     parameter GAMEOVER_X = 320 - GAMEOVER_WIDTH/2;
@@ -65,7 +65,7 @@ module vga_ball(
     logic [3:0] digit0, digit1;
     // seven-segment decode signals {A,B,C,D,E,F,G}
     logic [6:0] seg0, seg1;
-    // Pixel output for seven-segment display
+    // 用于七段显示的像素输出
     logic        score_pixel;
 
     parameter BIRD_X = 100;
@@ -145,11 +145,11 @@ module vga_ball(
             gameover_addr = 0;
     end
 
-    //Pipe structure parameters
+    //管道结构参数（周日晚调试，左侧柱子左边触边缘 就立刻消失）
     parameter PIPE_WIDTH = 52;
     parameter GAP_HEIGHT = 100;      
     parameter PIPE_COUNT = 3;
-    parameter PIPE_SPACING = 213;
+    parameter PIPE_SPACING = 213; //前一条柱子最左边到前一条柱子最右边，实际间隔127-52 = 75
 
     typedef struct packed {
         logic [9:0] x; 
@@ -161,7 +161,7 @@ module vga_ball(
     integer i;
     logic [9:0] max_pipe_x;
 
-    // === LFSR LFSR Random Number Generation ===
+    // === LFSR 随机数生成 ===
     logic [7:0] lfsr;
     logic       lfsr_enable;
     
